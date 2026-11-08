@@ -1,26 +1,59 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  --color-brand: #1f4e79;
+  --color-brand-dark: #173b5c;
+  --color-brand-soft: #e7eff6;
+  --color-ink: #17212b;
+  --color-muted: #566270;
+  --color-line: #d9e0e7;
+  --color-canvas: #f4f6f8;
+  --color-ok: #14663f;
+  --color-ok-soft: #e3f4ea;
+  --color-warn: #8a5300;
+  --color-warn-soft: #fdf1dc;
+  --color-danger: #b3261e;
+  --color-danger-soft: #fbe9e7;
+  /* Chart series. Validated for colour-blind separation against a light surface. */
+  --color-male: #2a78d6;
+  --color-female: #eb6834;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+dialog::backdrop {
+  background: rgb(15 23 32 / 0.5);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.toast-in {
+  animation: toast-in 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
 }
