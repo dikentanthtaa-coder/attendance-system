@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ArrowLeft, CircleCheck, Phone, UserRound } from "lucide-react";
 import { CenterSelect, centerName, EMPTY_CENTER, type CenterValue } from "@/components/center-select";
-import { api, Button, ClientApiError, ErrorNote, Field, inputClass } from "@/components/ui";
+import { Alert, Button, Card, CardHeader, Field, TextInput } from "@/components/ui";
+import { api, ClientApiError } from "@/lib/client-api";
 import { normalizeMobile, type EventSession, type Gender } from "@/lib/shared";
 
 export type QuickEntryPrefill = { name?: string; mobile?: string; globalMemberId?: string };
@@ -80,36 +82,39 @@ export function QuickEntryPanel({
   }
 
   return (
-    <section aria-label="Quick Entry" className="rounded-card border border-line bg-white p-4">
-      <h2 className="text-base font-semibold">Quick Entry: new member</h2>
-      <p className="mt-0.5 mb-4 text-muted">
-        Will be saved as <strong className="font-semibold text-ink">{gender}</strong> and marked present for <strong className="font-semibold text-ink">{event.name}</strong>.
-      </p>
+    <Card aria-label="Quick Entry">
+      <CardHeader
+        title="Quick Entry: new member"
+        description={
+          <>
+            Will be saved as <strong className="font-semibold text-ink">{gender}</strong> and marked present for <strong className="font-semibold text-ink">{event.name}</strong>.
+          </>
+        }
+      />
 
-      <form onSubmit={submit} className="flex flex-col gap-4">
+      <form onSubmit={submit} className="flex flex-col gap-4 p-4 md:p-5">
         <Field label="Name" htmlFor="qe-name">
-          <input id="qe-name" required maxLength={120} autoFocus={!prefill.name} className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
+          <TextInput id="qe-name" icon={UserRound} required maxLength={120} autoFocus={!prefill.name} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
 
         <Field label="Mobile Number" htmlFor="qe-mobile">
-          <input
+          <TextInput
             id="qe-mobile"
+            icon={Phone}
             ref={mobileRef}
             required
             type="tel"
             inputMode="numeric"
             autoComplete="off"
             autoFocus={Boolean(prefill.name)}
-            className={inputClass}
             value={mobile}
             onChange={(e) => setMobile(e.target.value)}
           />
         </Field>
 
         {needsConfirmation && (
-          <div role="alert" className="rounded-control bg-warn-soft p-3 text-sm">
-            <p className="font-semibold text-warn">Aa mobile number aa member sathe already registered chhe.</p>
-            <ul className="mt-1 font-semibold">
+          <Alert tone="warn" title="Aa mobile number aa member sathe already registered chhe.">
+            <ul className="font-semibold">
               {matches.map((m, i) => <li key={i}>{m}</li>)}
             </ul>
             <p className="mt-2">Continue karvu chhe ke Cancel? Family members can share a number. Continuing adds a separate member and doesn&apos;t change the existing one.</p>
@@ -117,7 +122,7 @@ export function QuickEntryPanel({
               <Button variant="secondary" onClick={() => { setMobile(""); mobileRef.current?.focus(); }}>Cancel</Button>
               <Button onClick={() => setConfirmedMobile(normalized)}>Continue</Button>
             </div>
-          </div>
+          </Alert>
         )}
 
         <Field label="Center" htmlFor="qe-center">
@@ -125,16 +130,18 @@ export function QuickEntryPanel({
         </Field>
 
         <Field label="Global Member ID" hint="(optional)" htmlFor="qe-id">
-          <input id="qe-id" maxLength={50} autoComplete="off" className={inputClass} value={globalMemberId} onChange={(e) => setGlobalMemberId(e.target.value)} />
+          <TextInput id="qe-id" maxLength={50} autoComplete="off" value={globalMemberId} onChange={(e) => setGlobalMemberId(e.target.value)} />
         </Field>
 
-        {error && <ErrorNote>{error}</ErrorNote>}
+        {error && <Alert tone="danger" title={error} />}
 
-        <div className="flex flex-wrap gap-2">
-          <Button type="submit" disabled={busy || needsConfirmation}>{busy ? "Saving…" : "Save & Mark Present"}</Button>
-          <Button variant="secondary" onClick={onCancel}>Back to search</Button>
+        <div className="flex flex-col gap-2 sm:flex-row-reverse sm:justify-start">
+          <Button type="submit" variant="success" size="lg" icon={CircleCheck} loading={busy} disabled={needsConfirmation} className="sm:flex-1">
+            {busy ? "Saving…" : "Save & Mark Present"}
+          </Button>
+          <Button variant="secondary" size="lg" icon={ArrowLeft} onClick={onCancel}>Back to search</Button>
         </div>
       </form>
-    </section>
+    </Card>
   );
 }

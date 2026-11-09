@@ -1,86 +1,103 @@
 @import "tailwindcss";
 
-/* Tokens and the reasons behind them are in DESIGN.md. */
+/* Tokens and the reasons behind them are in DESIGN.md. Change colours here, not in screens. */
 @theme {
-  --color-brand: #1f4e79;
-  --color-brand-dark: #173b5c;
-  --color-brand-soft: #e4edf5;
-  --color-ink: #14202c;
-  --color-muted: #4f5b68;
-  --color-canvas: #f2f5f8;
-  --color-active: #e2e8ee;
-  --color-line: #dde3ea;
-  --color-rule: #edf0f4;
-  --color-control: #b9c3ce;
-  --color-ok: #14663f;
-  --color-ok-soft: #e1f3e8;
-  --color-warn: #8a5300;
+  --color-brand: #1c5a96;
+  --color-brand-dark: #154673;
+  --color-brand-deep: #0f2f4f;
+  --color-brand-soft: #e8f1fa;
+  --color-accent: #f5a524;
+  --color-ink: #15212e;
+  --color-muted: #52606e;
+  --color-canvas: #f3f6fa;
+  --color-active: #e4eaf1;
+  --color-line: #dfe6ee;
+  --color-rule: #edf1f5;
+  --color-control: #b6c2cf;
+  --color-ok: #13703f;
+  --color-ok-dark: #0e5730;
+  --color-ok-soft: #e2f5e9;
+  --color-warn: #875100;
   --color-warn-soft: #fdf1dc;
   --color-danger: #b3261e;
+  --color-danger-dark: #8f1e18;
   --color-danger-soft: #fbe9e7;
   /* Chart series. Validated for colour-blind separation against a light surface. */
   --color-male: #2a78d6;
+  --color-male-soft: #e9f2fd;
+  --color-male-ink: #1a5499;
   --color-female: #eb6834;
+  --color-female-soft: #fdeee7;
+  --color-female-ink: #a03d13;
   --font-sans: var(--font-face), ui-sans-serif, system-ui, sans-serif;
-  --radius-card: 8px;
-  --radius-control: 6px;
+  --radius-card: 14px;
+  --radius-control: 10px;
+  --shadow-card: 0 1px 2px rgb(15 47 79 / 0.05), 0 4px 14px rgb(15 47 79 / 0.05);
 }
 
-html {
-  color-scheme: light;
-  scrollbar-color: var(--color-control) transparent;
-  accent-color: var(--color-brand);
-}
+/* In the base layer so that utility classes, such as a field's focus ring, can override these. */
+@layer base {
+  html {
+    color-scheme: light;
+    scrollbar-color: var(--color-control) transparent;
+    accent-color: var(--color-brand);
+  }
 
-body {
-  background: var(--color-canvas);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
-  font-size: 0.875rem;
-  line-height: 1.45;
-  /* Mukta Vaani closes up the space after a comma or full stop; this reopens it. */
-  word-spacing: 0.08em;
-  /* Nearly everything here is IDs, phone numbers and counts, which must line up. */
-  font-variant-numeric: tabular-nums;
-}
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    line-height: 1.45;
+    /* Mukta Vaani closes up the space after a comma or full stop; this reopens it. */
+    word-spacing: 0.08em;
+    /* Nearly everything here is IDs, phone numbers and counts, which must line up. */
+    font-variant-numeric: tabular-nums;
+  }
 
-h1,
-h2 {
-  text-wrap: balance;
-}
+  h1,
+  h2 {
+    text-wrap: balance;
+  }
 
-p {
-  text-wrap: pretty;
-}
+  p {
+    text-wrap: pretty;
+  }
 
-::selection {
-  background: var(--color-brand);
-  color: #fff;
-}
+  ::selection {
+    background: var(--color-brand);
+    color: #fff;
+  }
 
-input,
-select,
-textarea,
-button {
-  word-spacing: inherit;
-}
+  input,
+  select,
+  textarea,
+  button {
+    word-spacing: inherit;
+  }
 
-input,
-textarea {
-  caret-color: var(--color-brand);
-}
+  input,
+  textarea {
+    caret-color: var(--color-brand);
+  }
 
-a {
-  text-underline-offset: 3px;
-}
+  /* SearchInput has its own clear button. */
+  input[type="search"]::-webkit-search-cancel-button {
+    display: none;
+  }
 
-:focus-visible {
-  outline: 2px solid var(--color-brand);
-  outline-offset: 2px;
-}
+  a {
+    text-underline-offset: 3px;
+  }
 
-dialog::backdrop {
-  background: rgb(20 32 44 / 0.45);
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+
+  dialog::backdrop {
+    background: rgb(15 47 79 / 0.5);
+  }
 }
 
 @keyframes rise-in {

@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Mukta_Vaani } from "next/font/google";
-import { ToastProvider } from "@/components/toast";
+import { ToastProvider } from "@/components/ui";
 import "./globals.css";
 
 // Carries Latin and Gujarati script, so a name in either reads properly, and has true tabular
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#f2f5f8",
+  themeColor: "#0f2f4f",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

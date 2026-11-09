@@ -1,27 +1,35 @@
 "use client";
 
 import { useState } from "react";
-import { useToast } from "@/components/toast";
-import { api, Button, ConfirmDialog, StatusLabel } from "@/components/ui";
+import { Play, RotateCcw, Square, type LucideIcon } from "lucide-react";
+import { EventDayCard } from "@/components/event-days";
+import { Alert, Button, ConfirmDialog, PageHeader, useToast, type ButtonVariant } from "@/components/ui";
+import { api } from "@/lib/client-api";
 import { formatDateTime, type EventSession } from "@/lib/shared";
 
 type Action = "start" | "end" | "restart";
 type Pending = { event: EventSession; action: Action };
 
-const COPY: Record<Action, { title: string; label: string; message: (name: string) => string }> = {
+const ACTIONS: Record<Action, { title: string; label: string; icon: LucideIcon; variant: ButtonVariant; message: (name: string) => string }> = {
   start: {
     title: "Start event",
     label: "Start Event",
+    icon: Play,
+    variant: "primary",
     message: (name) => `Start ${name}? Officers will be able to mark attendance right away.`,
   },
   end: {
     title: "End event",
     label: "End Event",
+    icon: Square,
+    variant: "danger-outline",
     message: (name) => `End ${name}? Attendance marking will stop immediately for all officers.`,
   },
   restart: {
     title: "Restart event",
     label: "Restart Event",
+    icon: RotateCcw,
+    variant: "secondary",
     message: (name) => `${name} has ended. Restart it only if it was ended by mistake. Officers will be able to mark attendance again.`,
   },
 };
@@ -53,50 +61,42 @@ export function EventControls({ initialEvents }: { initialEvents: EventSession[]
   }
 
   return (
-    <section aria-label="Event control" className="flex flex-col gap-3">
-      <div>
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-muted" data-testid="event-summary">
-          {active ? `${active.name} is running. Officers can mark attendance.` : "No event is running, so officers can't mark attendance."}
-        </p>
-      </div>
+    <section aria-label="Event control" className="flex flex-col gap-4">
+      <PageHeader title="Dashboard" description="Run each day of the event and watch attendance as it comes in." />
 
-      {/* The three-day strip: one object with three states, not three separate cards. */}
-      <div className="grid divide-y divide-line overflow-hidden rounded-card border border-line bg-white sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+      <Alert tone={active ? "ok" : "info"} title={active ? `${active.name} is running. Officers can mark attendance.` : "No event is running, so officers can't mark attendance."} />
+
+      <div className="grid gap-3 md:grid-cols-3">
         {events.map((event) => {
           const action: Action = event.status === "not_started" ? "start" : event.status === "active" ? "end" : "restart";
           const blocked = action !== "end" && Boolean(active);
+          const look = ACTIONS[action];
           return (
-            <article key={event.event_day} className={`flex flex-col gap-1.5 p-3 sm:gap-2 sm:p-4 ${event.status === "active" ? "bg-ok-soft/60" : ""}`}>
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-base font-semibold">{event.name}</h2>
-                <StatusLabel status={event.status} />
-              </div>
-              <p className="min-h-5 text-muted">
-                {event.status === "active" && `Started ${formatDateTime(event.started_at)}`}
-                {event.status === "ended" && `Ended ${formatDateTime(event.ended_at)}`}
-                {event.status === "not_started" && !blocked && "Ready to start"}
-                {event.status === "not_started" && blocked && `End Day ${active!.event_day} before starting this day`}
-              </p>
-              {!blocked && (
-                <Button
-                  variant={action === "end" ? "danger-outline" : action === "restart" ? "secondary" : "primary"}
-                  className="mt-auto self-start"
-                  onClick={() => setPending({ event, action })}
-                >
-                  {COPY[action].label}
+            <EventDayCard
+              key={event.event_day}
+              event={event}
+              note={
+                event.status === "active" ? `Started ${formatDateTime(event.started_at)}`
+                : event.status === "ended" ? `Ended ${formatDateTime(event.ended_at)}`
+                : blocked ? `End Day ${active!.event_day} before starting this day`
+                : "Ready to start"
+              }
+              action={
+                // Shown even when blocked, so Admin can see the action exists and why it's unavailable.
+                <Button variant={look.variant} icon={look.icon} disabled={blocked} className="w-full" onClick={() => setPending({ event, action })}>
+                  {look.label}
                 </Button>
-              )}
-            </article>
+              }
+            />
           );
         })}
       </div>
 
       <ConfirmDialog
         open={pending !== null}
-        title={pending ? COPY[pending.action].title : ""}
-        message={pending ? COPY[pending.action].message(pending.event.name) : ""}
-        confirmLabel={pending ? COPY[pending.action].label : ""}
+        title={pending ? ACTIONS[pending.action].title : ""}
+        message={pending ? ACTIONS[pending.action].message(pending.event.name) : ""}
+        confirmLabel={pending ? ACTIONS[pending.action].label : ""}
         danger={pending?.action === "end"}
         busy={busy}
         onConfirm={confirm}

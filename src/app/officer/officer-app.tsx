@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleCheck, Search, UserPlus } from "lucide-react";
-import { useToast } from "@/components/toast";
-import { api, Button, ClientApiError, ErrorNote, inputClass, LogoutButton, Mark, StatusLabel } from "@/components/ui";
+import { CalendarClock, CircleCheck, Hash, History, Lock, MapPin, Phone, Search, UserPlus } from "lucide-react";
+import { EventDayTabs } from "@/components/event-days";
+import { Alert, AppShell, Badge, Button, Card, CardHeader, EmptyState, Field, MetaList, PersonRow, SearchInput, Spinner, useToast } from "@/components/ui";
+import { api, ClientApiError } from "@/lib/client-api";
 import { formatTime, STATUS_LABEL, type EventSession, type Gender } from "@/lib/shared";
 import { QuickEntryPanel, type QuickEntryPrefill } from "./quick-entry-panel";
 
@@ -19,7 +20,7 @@ type SearchResult = {
 
 type MarkResponse = { status: "marked" | "already_present"; memberName: string; markedAt: string; markedBy: string };
 
-type Marked = { key: number; label: string; name: string; id: string | null; at: string };
+type Marked = { key: number; label: string; name: string; at: string };
 
 const POLL_MS = 5000;
 const RECENT_LIMIT = 5;
@@ -63,63 +64,48 @@ export function OfficerApp({ gender, displayName, initialEvents }: { gender: Gen
   }, [refreshEvents]);
 
   return (
-    <div className="flex flex-1 flex-col">
-      <header className="border-b border-line">
-        <div className="mx-auto flex w-full max-w-2xl items-center gap-3 px-4 py-2">
-          <Mark />
-          <div className="min-w-0 flex-1">
-            <p className="truncate font-semibold">Gyansatr Attendance</p>
-            <p className="text-xs text-muted">{displayName} · {gender} members only</p>
-          </div>
-          <LogoutButton />
-        </div>
-      </header>
+    <AppShell subtitle={`${displayName} · ${gender} members only`} width="narrow">
+      <EventDayTabs events={events} selectedDay={selectedDay} onSelect={setChosenDay} />
 
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 p-4">
-        {/* The three-day strip: the one element that belongs only to this event. */}
-        <nav aria-label="Event days" className="grid grid-cols-3 divide-x divide-line overflow-hidden rounded-card border border-line bg-canvas">
-          {events.map((event) => {
-            const isSelected = event.event_day === selectedDay;
-            return (
-              <button
-                key={event.event_day}
-                type="button"
-                aria-pressed={isSelected}
-                onClick={() => setChosenDay(event.event_day)}
-                className={`relative flex min-h-16 flex-col justify-center gap-0.5 px-3 py-2 text-left transition-colors duration-150 ${isSelected ? "bg-white" : "hover:bg-active"}`}
-              >
-                {isSelected && <span aria-hidden className="absolute inset-x-0 top-0 h-0.5 bg-brand" />}
-                <span className={`text-base ${isSelected ? "font-semibold" : "font-medium"}`}>Day {event.event_day}</span>
-                <StatusLabel status={event.status} />
-              </button>
-            );
-          })}
-        </nav>
-
-        {selected.status === "active" ? (
-          <MarkingPanel
-            key={selectedDay}
-            event={selected}
-            gender={gender}
-            count={count}
-            onEventChanged={() => refreshEvents().catch(() => {})}
-            onMarked={() => setCounts((c) => ({ ...c, [selectedDay]: (c[selectedDay] ?? 0) + 1 }))}
+      {selected.status === "active" ? (
+        <MarkingPanel
+          key={selectedDay}
+          event={selected}
+          gender={gender}
+          count={count}
+          onEventChanged={() => refreshEvents().catch(() => {})}
+          onMarked={() => setCounts((c) => ({ ...c, [selectedDay]: (c[selectedDay] ?? 0) + 1 }))}
+        />
+      ) : (
+        <Card>
+          <EmptyState
+            icon={selected.status === "ended" ? Lock : CalendarClock}
+            titleAs="h1"
+            title={`${selected.name} is ${STATUS_LABEL[selected.status]}`}
+            description={
+              <>
+                {selected.status === "ended"
+                  ? "This event has ended, so attendance can no longer be marked."
+                  : "Attendance can be marked after Admin starts this event."}
+                {count > 0 && ` ${count} ${gender.toLowerCase()} members were marked present.`}
+              </>
+            }
+            action={activeDay && <Button onClick={() => setChosenDay(activeDay)}>Go to Day {activeDay}, which is active</Button>}
           />
-        ) : (
-          <div className="flex flex-col items-start gap-1 py-6">
-            <h1 className="text-xl font-semibold">{selected.name} is {STATUS_LABEL[selected.status]}</h1>
-            <p className="text-muted">
-              {selected.status === "ended"
-                ? "This event has ended, so attendance can no longer be marked."
-                : "Attendance can be marked after Admin starts this event."}
-            </p>
-            {count > 0 && <p className="text-muted">{count} {gender.toLowerCase()} members were marked present.</p>}
-            {activeDay && (
-              <Button className="mt-3" onClick={() => setChosenDay(activeDay)}>Go to Day {activeDay}, which is active</Button>
-            )}
-          </div>
-        )}
-      </main>
+        </Card>
+      )}
+    </AppShell>
+  );
+}
+
+function MarkingHeading({ event, gender, count }: { event: EventSession; gender: Gender; count: number }) {
+  return (
+    <div className="flex items-center justify-between gap-3 bg-brand px-4 py-2.5 text-white">
+      <h1 className="text-lg leading-tight font-bold">Marking {event.name}</h1>
+      <p className="flex shrink-0 items-baseline gap-1.5" data-testid="present-count">
+        <span className="text-3xl leading-none font-bold">{count}</span>
+        <span className="text-sm text-white/85">{gender.toLowerCase()} present</span>
+      </p>
     </div>
   );
 }
@@ -151,6 +137,7 @@ function MarkingPanel({
   const trimmed = query.trim();
   const showResults = trimmed !== "" && resultsFor === trimmed;
   const searching = trimmed !== "" && resultsFor !== trimmed && !searchError;
+  const noMatches = showResults && results.length === 0;
   const onlyOne = showResults && results.length === 1 && !results[0].present_at;
 
   useEffect(() => {
@@ -184,9 +171,9 @@ function MarkingPanel({
     inputRef.current?.focus();
   };
 
-  const remember = (label: string, name: string, id: string | null, at: string) => {
+  const remember = (label: string, name: string, at: string) => {
     nextKey.current += 1;
-    const entry = { key: nextKey.current, label, name, id, at };
+    const entry = { key: nextKey.current, label, name, at };
     setRecent((rows) => [entry, ...rows].slice(0, RECENT_LIMIT));
   };
 
@@ -203,7 +190,7 @@ function MarkingPanel({
           rows.map((r) => (r.id === member.id ? { ...r, present_at: res.markedAt, present_marked_by: res.markedBy } : r)),
         );
       } else {
-        remember("Present", res.memberName, member.global_member_id, res.markedAt);
+        remember("Present", res.memberName, res.markedAt);
         onMarked();
         clearSearch();
       }
@@ -222,19 +209,12 @@ function MarkingPanel({
     else setPrefill({ name: trimmed });
   }
 
-  const heading = (
-    <div className="flex items-baseline justify-between gap-3">
-      <h1 className="text-xl font-semibold">Marking {event.name}</h1>
-      <p className="whitespace-nowrap text-muted" data-testid="present-count">
-        <span className="text-xl font-semibold text-ink">{count}</span> {gender.toLowerCase()} present
-      </p>
-    </div>
-  );
-
   if (prefill) {
     return (
-      <section className="flex flex-col gap-4">
-        {heading}
+      <>
+        <Card className="overflow-hidden">
+          <MarkingHeading event={event} gender={gender} count={count} />
+        </Card>
         <QuickEntryPanel
           prefill={prefill}
           event={event}
@@ -242,7 +222,7 @@ function MarkingPanel({
           onCancel={() => setPrefill(null)}
           onSaved={(name, at) => {
             setPrefill(null);
-            remember("Added and marked present", name, null, at);
+            remember("Added and marked present", name, at);
             onMarked();
             setQuery("");
             setResults([]);
@@ -250,108 +230,129 @@ function MarkingPanel({
           }}
           onEventChanged={onEventChanged}
         />
-      </section>
+      </>
     );
   }
 
   const [latest, ...earlier] = recent;
 
   return (
-    <section className="flex flex-col gap-4" aria-label={`Mark attendance for ${event.name}`}>
-      {heading}
-
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="member-search" className="text-sm font-medium">Search by Member ID, name or mobile</label>
-        <div className="relative">
-          <Search aria-hidden size={18} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted" />
-          <input
-            id="member-search"
-            ref={inputRef}
-            type="search"
-            autoFocus
-            enterKeyHint="search"
-            autoComplete="off"
-            autoCorrect="off"
-            placeholder="2051, ram pat, or 98765"
-            className={`${inputClass} min-h-13 pl-10 text-lg`}
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setSearchError("");
-            }}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" || !showResults) return;
-              e.preventDefault();
-              // Enter marks only when there's exactly one candidate, so it can never pick the wrong person.
-              if (onlyOne) mark(results[0]);
-            }}
-          />
+    <>
+      <Card aria-label={`Mark attendance for ${event.name}`} className="overflow-hidden">
+        <MarkingHeading event={event} gender={gender} count={count} />
+        <div className="p-4">
+          <Field label="Search by Member ID, name or mobile" htmlFor="member-search">
+            <SearchInput
+              id="member-search"
+              large
+              inputRef={inputRef}
+              autoFocus
+              enterKeyHint="search"
+              autoComplete="off"
+              autoCorrect="off"
+              placeholder="2051, ram pat, or 98765"
+              value={query}
+              onClear={clearSearch}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSearchError("");
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || !showResults) return;
+                e.preventDefault();
+                // Enter marks only when there's exactly one candidate, so it can never pick the wrong person.
+                if (onlyOne) mark(results[0]);
+              }}
+            />
+          </Field>
         </div>
-      </div>
+      </Card>
 
-      {searchError && <ErrorNote>{searchError}</ErrorNote>}
+      {searchError && <Alert tone="danger" title={searchError} />}
 
       {!trimmed && latest && (
         // Next to the search box, because a phone's keyboard can hide anything lower down.
-        <div key={latest.key} role="status" className="rise-in flex items-center gap-2.5 rounded-card bg-ok-soft px-3 py-2.5 text-ok">
-          <CircleCheck aria-hidden size={20} className="shrink-0" />
-          <p className="min-w-0 flex-1 font-semibold break-words">{latest.label}: {latest.name}</p>
-          <span className="shrink-0 text-sm">{formatTime(latest.at)}</span>
-        </div>
+        <Alert key={latest.key} tone="ok" role="status" className="rise-in" title={`${latest.label}: ${latest.name}`} action={<span className="text-sm font-semibold text-ok">{formatTime(latest.at)}</span>} />
       )}
 
-      {!trimmed && earlier.length > 0 && (
-        <div>
-          <h2 className="mb-1 text-sm font-medium text-muted">Marked before that</h2>
-          <ul className="divide-y divide-rule rounded-card border border-line bg-white">
-            {earlier.map((row) => (
-              <li key={row.key} className="flex items-center justify-between gap-3 px-3 py-2">
-                <span className="min-w-0 break-words">{row.name}</span>
-                <span className="shrink-0 text-muted">{formatTime(row.at)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+      {searching && (
+        <p className="flex items-center justify-center gap-2 py-3 text-muted">
+          <Spinner />
+          Searching…
+        </p>
       )}
 
       {showResults && results.length > 0 && (
-        <ul className="divide-y divide-rule rounded-card border border-line bg-white">
-          {results.map((member) => (
-            <li key={member.id} className="flex items-center gap-3 px-3 py-2.5">
-              <div className="min-w-0 flex-1">
-                <p className="text-base font-semibold break-words">{member.name}</p>
-                <p className="mt-0.5 flex flex-wrap gap-x-3 text-muted">
-                  {member.global_member_id && <span className="font-medium text-ink">{member.global_member_id}</span>}
-                  <span>{member.mobile}</span>
-                  <span>{member.center}</span>
-                </p>
-              </div>
-              {member.present_at ? (
-                <span className="shrink-0 rounded-control bg-warn-soft px-2.5 py-1 text-center text-xs font-semibold text-warn">
-                  Already Present
-                  <span className="block font-normal">{formatTime(member.present_at)}</span>
-                </span>
-              ) : (
-                // A row of solid buttons would out-shout the names, so only a single match gets one.
-                <Button variant={onlyOne ? "primary" : "outline"} className="shrink-0 px-3" disabled={markingId !== null} onClick={() => mark(member)}>
-                  {markingId === member.id ? "Saving…" : "Mark Present"}
-                </Button>
-              )}
-            </li>
-          ))}
-        </ul>
+        <Card aria-label="Search results" className="overflow-hidden">
+          <ul className="divide-y divide-rule">
+            {results.map((member) => (
+              <li key={member.id}>
+                <PersonRow
+                  name={member.name}
+                  gender={gender}
+                  hideAvatarOnPhone
+                  meta={
+                    <MetaList
+                      items={[
+                        member.global_member_id ? { icon: Hash, label: member.global_member_id, strong: true } : null,
+                        { icon: Phone, label: member.mobile },
+                        { icon: MapPin, label: member.center },
+                      ]}
+                    />
+                  }
+                  actions={
+                    member.present_at ? (
+                      <span className="flex flex-col items-center gap-0.5 text-center">
+                        <Badge tone="warn" icon={CircleCheck}>Already Present</Badge>
+                        <span className="text-xs text-muted">{formatTime(member.present_at)}</span>
+                      </span>
+                    ) : (
+                      <Button variant="success" icon={CircleCheck} className="px-3" loading={markingId === member.id} disabled={markingId !== null} onClick={() => mark(member)}>
+                        Mark Present
+                      </Button>
+                    )
+                  }
+                />
+              </li>
+            ))}
+          </ul>
+        </Card>
       )}
 
-      {showResults && results.length === 0 && (
-        <p className="text-muted">No {gender.toLowerCase()} member matches “{trimmed}”. If they are new, add them below.</p>
+      {noMatches && (
+        <Card>
+          <EmptyState
+            icon={Search}
+            titleAs="p"
+            title={`No ${gender.toLowerCase()} member matches “${trimmed}”`}
+            description="Check the spelling or try the mobile number. If they are new, add them with Quick Entry."
+          />
+        </Card>
       )}
 
-      {searching && <p className="text-muted">Searching…</p>}
+      {!trimmed && !latest && (
+        <Card>
+          <EmptyState icon={Search} titleAs="p" title="Ready for the next person" description="Type at least part of their Member ID, name or mobile number." />
+        </Card>
+      )}
 
-      <Button variant={showResults && results.length === 0 ? "primary" : "secondary"} className="self-start" onClick={openQuickEntry}>
-        <UserPlus aria-hidden size={16} />
+      <Button variant={noMatches ? "primary" : "secondary"} icon={UserPlus} size="lg" className="w-full" onClick={openQuickEntry}>
         Quick Entry: add new {gender.toLowerCase()} member
       </Button>
-    </section>
+
+      {!trimmed && earlier.length > 0 && (
+        <Card>
+          <CardHeader title={<span className="inline-flex items-center gap-2"><History aria-hidden size={16} className="text-muted" />Marked before that</span>} />
+          <ul className="divide-y divide-rule">
+            {earlier.map((row) => (
+              <li key={row.key} className="flex items-center justify-between gap-3 px-4 py-2.5 md:px-5">
+                <span className="min-w-0 font-medium break-words">{row.name}</span>
+                <span className="shrink-0 text-sm text-muted">{formatTime(row.at)}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+    </>
   );
 }

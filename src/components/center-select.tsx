@@ -2,7 +2,7 @@
 
 import { useId, useState } from "react";
 import { CENTERS } from "@/lib/shared";
-import { inputClass } from "./ui";
+import { TextInput } from "./ui";
 
 const OTHER = "Other";
 const OPTIONS: string[] = [...CENTERS, OTHER];
@@ -38,7 +38,7 @@ export function CenterSelect({ id, value, onChange }: { id: string; value: Cente
   return (
     <div className="flex flex-col gap-2">
       <div className="relative">
-        <input
+        <TextInput
           id={id}
           role="combobox"
           aria-expanded={open}
@@ -46,7 +46,6 @@ export function CenterSelect({ id, value, onChange }: { id: string; value: Cente
           aria-autocomplete="list"
           autoComplete="off"
           placeholder="Type or choose a center"
-          className={inputClass}
           value={query}
           onFocus={(e) => {
             e.target.select();
@@ -86,7 +85,7 @@ export function CenterSelect({ id, value, onChange }: { id: string; value: Cente
             id={listId}
             role="listbox"
             aria-label="Centers"
-            className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-card bg-white py-1 shadow-lg"
+            className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-control border border-line bg-white py-1 shadow-lg"
           >
             {matches.map((option, i) => (
               <li
@@ -108,12 +107,11 @@ export function CenterSelect({ id, value, onChange }: { id: string; value: Cente
         )}
       </div>
       {value.selected === OTHER && (
-        <input
+        <TextInput
           aria-label="Center name"
           autoFocus
           maxLength={80}
           placeholder="Type the center name"
-          className={inputClass}
           value={value.other}
           onChange={(e) => onChange({ selected: OTHER, other: e.target.value })}
         />

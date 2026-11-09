@@ -45,7 +45,7 @@ Everything below is checked on the server or in the database, so it holds even f
 - **No duplicate attendance:** a unique constraint on member and event day.
 - **Marking stops when an event ends:** each mark takes a row lock on the event inside its transaction, so a mark can't slip through as Admin ends the event.
 - **Public API closed:** row level security is on with no policies, so Supabase's public API can't read any table.
-- **Audit trail:** uploads, event changes, marks, Quick Entries and corrections are written to `audit_log`, in the same transaction as the change.
+- **Audit trail:** uploads, event changes, marks, Quick Entries and corrections are written to `audit_log`, in the same transaction as the change. The app has no screen for it; read it in the Supabase table editor.
 
 ## Tests
 

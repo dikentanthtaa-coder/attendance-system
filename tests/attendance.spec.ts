@@ -18,12 +18,22 @@ async function xlsx(rows: unknown[][], header = HEADER) {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+// A screen can crash while everything else about it still looks fine, so every test run watches for this.
+const pageErrors: string[] = [];
+
 async function loginPage(browser: Browser, username: string, viewport?: { width: number; height: number }) {
   const context = await browser.newContext({ viewport: viewport ?? { width: 1280, height: 900 }, acceptDownloads: true });
   const page = await context.newPage();
+  page.on("pageerror", (err) => {
+    pageErrors.push(`${username}: ${err.message}`);
+    console.log(`PAGE ERROR (${username} at ${page.url()}): ${err.stack ?? err.message}`);
+  });
+  page.on("console", (msg) => {
+    if (msg.type() === "error") console.log(`CONSOLE ERROR (${username} at ${page.url()}): ${msg.text()}`);
+  });
   await page.goto("/login");
   await page.getByLabel("Username").fill(username);
-  await page.getByLabel("Password").fill(TEST_PASSWORD);
+  await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
   await page.getByRole("button", { name: "Log in" }).click();
   await page.waitForURL(username === "admin" ? "**/admin" : "**/officer");
   return page;
@@ -56,11 +66,15 @@ test("login: pre-created accounts only, no signup, wrong password refused", asyn
   await expect(page.getByText(/sign ?up|register/i)).toHaveCount(0);
 
   // Everything else here would still pass on an unstyled page, so check the styles really load.
-  await expect(page.getByRole("button", { name: "Log in" })).toHaveCSS("background-color", "rgb(31, 78, 121)");
-  await expect(page.getByRole("button", { name: "Log in" })).toHaveCSS("min-height", "44px");
+  await expect(page.getByRole("button", { name: "Log in" })).toHaveCSS("background-color", "rgb(28, 90, 150)");
+  await expect(page.getByLabel("Username")).toHaveCSS("min-height", "44px");
 
   await page.getByLabel("Username").fill("admin");
-  await page.getByLabel("Password").fill("wrong");
+  await page.getByLabel("Password", { exact: true }).fill("wrong");
+  await page.getByRole("button", { name: "Show password" }).click();
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "text");
+  await page.getByRole("button", { name: "Hide password" }).click();
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page.getByText("Wrong username or password.")).toBeVisible();
 
@@ -134,7 +148,9 @@ test("Excel upload in the UI: summary, invalid row details, and no duplicates on
     mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     buffer: await xlsx(rows),
   });
-  await admin.getByRole("button", { name: "Upload" }).click();
+  // With no members yet, the upload box is already open.
+  await expect(admin.getByRole("button", { name: "Upload file" })).toBeVisible();
+  await admin.getByRole("button", { name: "Upload file" }).click();
   const summary = admin.getByTestId("import-summary");
   await expect(summary).toBeVisible();
   await expect(summary.locator("dd")).toHaveText(["9", "5", "0", "4"]);
@@ -521,10 +537,11 @@ test("every important activity is in the audit log with user and time", async ()
   ]));
   expect((await db`select count(*)::int as n from audit_log where username = '' or at is null`)[0].n).toBe(0);
 
-  await admin.goto("/admin/activity");
-  await expect(admin.getByRole("table")).toContainText("Deleted member");
-  await expect(admin.getByRole("table")).toContainText("Suresh Shah");
-  expect((await maleApi.get("/api/admin/audit")).status()).toBe(403);
+  // Recorded for the database only: there is no screen or API that shows it.
+  await admin.goto("/admin");
+  await expect(admin.getByRole("navigation", { name: "Admin" }).getByRole("link")).toHaveText(["Dashboard", "Members"]);
+  expect((await admin.goto("/admin/activity"))?.status()).toBe(404);
+  expect((await maleApi.get("/api/admin/audit")).status()).toBe(404);
 });
 
 test("performance: 20,000 members upload and search quickly", async () => {
@@ -590,6 +607,14 @@ test("screens fit a phone with no sideways scroll; screenshots for review", asyn
   await admin.goto("/admin");
   await expect(admin.getByTestId("stat-total")).not.toHaveText("");
   await admin.screenshot({ path: `${dir}/admin-desktop.png`, fullPage: true });
+  await admin.goto("/admin/members");
+  await expect(admin.getByRole("region", { name: "Member list" }).getByRole("row").nth(1)).toBeVisible();
+  // With members in place, the one-off upload box stays out of the way until asked for.
+  await expect(admin.getByRole("button", { name: "Upload file" })).toBeHidden();
+  await admin.getByRole("button", { name: "Upload Excel" }).click();
+  await expect(admin.getByRole("button", { name: "Upload file" })).toBeVisible();
+  await admin.getByRole("button", { name: "Upload Excel" }).click();
+  await admin.screenshot({ path: `${dir}/members-desktop.png` });
 
   const adminPhone = await loginPage(browser, "admin", { width: 390, height: 844 });
   await expect(adminPhone.getByTestId("stat-total")).toBeVisible();
@@ -601,9 +626,7 @@ test("screens fit a phone with no sideways scroll; screenshots for review", asyn
   await adminPhone.goto("/admin/members");
   await expect(adminPhone.getByRole("region", { name: "Member list" }).getByRole("listitem").first()).toBeVisible();
   expect(await overflow(adminPhone)).toBeLessThanOrEqual(0);
-  await adminPhone.goto("/admin/activity");
-  await expect(adminPhone.getByRole("region", { name: "Activity" }).getByRole("listitem").first()).toBeVisible();
-  expect(await overflow(adminPhone)).toBeLessThanOrEqual(0);
+  await adminPhone.screenshot({ path: `${dir}/members-phone.png` });
 });
 
 test("idle officer screen and login, for review", async ({ browser }) => {
@@ -620,7 +643,13 @@ test("idle officer screen and login, for review", async ({ browser }) => {
   const fresh = await browser.newPage({ viewport: { width: 390, height: 844 } });
   await fresh.goto("/login");
   await fresh.screenshot({ path: `${dir}/login-phone.png` });
+  await fresh.setViewportSize({ width: 1280, height: 800 });
+  await fresh.screenshot({ path: `${dir}/login-desktop.png` });
   await fresh.close();
+});
+
+test("no screen threw an error during this whole run", () => {
+  expect(pageErrors).toEqual([]);
 });
 
 test("login locks briefly after repeated wrong passwords", async ({ request }) => {

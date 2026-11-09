@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { api, Button, ClientApiError, ErrorNote, Field, inputClass } from "@/components/ui";
+import { UserRound } from "lucide-react";
+import { Alert, Button, Field, PasswordInput, TextInput } from "@/components/ui";
+import { api, ClientApiError } from "@/lib/client-api";
 
 export function LoginForm() {
   const [username, setUsername] = useState("");
@@ -25,31 +27,29 @@ export function LoginForm() {
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       <Field label="Username" htmlFor="username">
-        <input
+        <TextInput
           id="username"
+          icon={UserRound}
           autoFocus
           autoCapitalize="none"
           autoCorrect="off"
           autoComplete="username"
           required
-          className={inputClass}
           value={username}
           onChange={(e) => setUsername(e.target.value)}
         />
       </Field>
       <Field label="Password" htmlFor="password">
-        <input
+        <PasswordInput
           id="password"
-          type="password"
           autoComplete="current-password"
           required
-          className={inputClass}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
       </Field>
-      {error && <ErrorNote>{error}</ErrorNote>}
-      <Button type="submit" disabled={busy}>{busy ? "Logging in…" : "Log in"}</Button>
+      {error && <Alert tone="danger" title={error} />}
+      <Button type="submit" size="lg" loading={busy} className="w-full">{busy ? "Logging in…" : "Log in"}</Button>
     </form>
   );
 }
