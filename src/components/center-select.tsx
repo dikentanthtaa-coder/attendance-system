@@ -86,7 +86,7 @@ export function CenterSelect({ id, value, onChange }: { id: string; value: Cente
             id={listId}
             role="listbox"
             aria-label="Centers"
-            className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-line bg-white py-1 shadow-lg"
+            className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-card bg-white py-1 shadow-lg"
           >
             {matches.map((option, i) => (
               <li
@@ -99,7 +99,7 @@ export function CenterSelect({ id, value, onChange }: { id: string; value: Cente
                   choose(option);
                 }}
                 onMouseEnter={() => setHighlight(i)}
-                className={`flex min-h-10 cursor-pointer items-center px-3 text-sm ${i === highlight ? "bg-brand-soft" : ""} ${option === OTHER ? "border-t border-line font-medium" : ""}`}
+                className={`flex min-h-11 cursor-pointer items-center px-3 text-sm ${i === highlight ? "bg-brand-soft" : ""} ${option === OTHER ? "border-t border-rule font-medium" : ""}`}
               >
                 {option}
               </li>

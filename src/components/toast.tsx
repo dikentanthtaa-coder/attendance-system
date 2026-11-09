@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
+import { CircleAlert, CircleCheck, TriangleAlert } from "lucide-react";
 
 type Tone = "success" | "warning" | "error";
 type Toast = { id: number; tone: Tone; message: string };
@@ -9,10 +10,10 @@ const ToastContext = createContext<(tone: Tone, message: string) => void>(() => 
 
 export const useToast = () => useContext(ToastContext);
 
-const TONES: Record<Tone, { className: string; icon: string }> = {
-  success: { className: "bg-ok text-white", icon: "✓" },
-  warning: { className: "bg-warn text-white", icon: "!" },
-  error: { className: "bg-danger text-white", icon: "✕" },
+const ICONS = {
+  success: <CircleCheck aria-hidden size={18} className="shrink-0 text-[#7fd6a5]" />,
+  warning: <TriangleAlert aria-hidden size={18} className="shrink-0 text-[#f5c15c]" />,
+  error: <CircleAlert aria-hidden size={18} className="shrink-0 text-[#ff9a90]" />,
 };
 
 export function ToastProvider({ children }: { children: ReactNode }) {
@@ -27,19 +28,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     timer.current = setTimeout(() => setToast(null), tone === "success" ? 2500 : 5000);
   }, []);
 
-  const value = useMemo(() => show, [show]);
-
   return (
-    <ToastContext.Provider value={value}>
+    <ToastContext.Provider value={show}>
       {children}
-      <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
+      {/* At the top, because a phone's keyboard can cover the bottom of the screen. */}
+      <div aria-live="polite" className="pointer-events-none fixed inset-x-0 top-3 z-50 flex justify-center px-4">
         {toast && (
-          <div
-            key={toast.id}
-            role="status"
-            className={`toast-in flex max-w-md items-center gap-2 rounded-lg px-4 py-3 text-sm font-medium shadow-lg ${TONES[toast.tone].className}`}
-          >
-            <span aria-hidden className="font-bold">{TONES[toast.tone].icon}</span>
+          <div key={toast.id} role="status" className="rise-in flex max-w-md items-center gap-2 rounded-card bg-ink px-4 py-3 text-sm font-medium text-white shadow-lg">
+            {ICONS[toast.tone]}
             {toast.message}
           </div>
         )}

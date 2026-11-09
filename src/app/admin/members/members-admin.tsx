@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { FileSpreadsheet } from "lucide-react";
 import { useToast } from "@/components/toast";
-import { api, Button, ConfirmDialog, Field, inputClass, Modal, Pagination } from "@/components/ui";
+import { api, Button, ConfirmDialog, ErrorNote, Field, inputClass, Modal, Pagination, RowAction } from "@/components/ui";
 import { CENTERS, SOURCE_LABEL, type Gender, type MemberSource } from "@/lib/shared";
 
 type ImportSummary = {
@@ -31,7 +32,7 @@ export function MembersAdmin() {
   const [refreshKey, setRefreshKey] = useState(0);
   return (
     <>
-      <h1 className="text-xl font-bold">Members</h1>
+      <h1 className="text-2xl font-semibold">Members</h1>
       <UploadCard onImported={() => setRefreshKey((k) => k + 1)} />
       <MemberList refreshKey={refreshKey} />
     </>
@@ -70,15 +71,16 @@ function UploadCard({ onImported }: { onImported: () => void }) {
   }
 
   return (
-    <section aria-label="Excel upload" className="flex flex-col gap-3 rounded-xl border border-line bg-white p-4">
+    <section aria-label="Excel upload" className="flex flex-col gap-3 rounded-card border border-line bg-white p-4">
       <div>
         <h2 className="text-base font-semibold">Upload member Excel</h2>
-        <p className="text-sm text-muted">
+        <p className="max-w-[70ch] text-muted">
           The first row must have these columns: <span className="font-medium text-ink">No, MemberID, Name, Mo.no., Gender, Center</span>. Uploading a MemberID that already exists updates that member.
         </p>
       </div>
       <form onSubmit={submit} className="flex flex-wrap items-center gap-3">
-        <label className="inline-flex min-h-11 cursor-pointer items-center rounded-lg border border-line bg-white px-4 text-sm font-semibold hover:bg-canvas focus-within:outline-2 focus-within:outline-brand">
+        <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-control border border-control bg-white px-4 text-sm font-semibold transition-colors duration-150 hover:border-muted hover:bg-canvas focus-within:outline-2 focus-within:outline-brand">
+          <FileSpreadsheet aria-hidden size={16} />
           Choose file
           <input
             ref={fileRef}
@@ -92,51 +94,41 @@ function UploadCard({ onImported }: { onImported: () => void }) {
             }}
           />
         </label>
-        <span className="min-w-0 truncate text-sm text-muted">{fileName || "No file chosen"}</span>
-        <Button type="submit" disabled={busy || !fileName}>{busy ? "Uploading…" : "Upload"}</Button>
+        <span className="min-w-0 truncate text-muted">{fileName || "No file chosen"}</span>
+        <Button type="submit" disabled={busy || !fileName}>{busy ? "Uploading…" : "Upload file"}</Button>
       </form>
 
-      {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>}
+      {error && <ErrorNote>{error}</ErrorNote>}
 
       {summary && (
-        <div className="flex flex-col gap-3 border-t border-line pt-3" data-testid="import-summary">
-          <p className="text-sm font-semibold">Upload result: {summary.fileName}</p>
-          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="flex flex-col gap-3 border-t border-rule pt-3" data-testid="import-summary">
+          <p className="font-semibold">Upload result: {summary.fileName}</p>
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
             {[
               ["Total rows", summary.totalRows],
               ["New members", summary.imported],
               ["Updated", summary.updated],
               ["Rows with errors", summary.errorRows],
             ].map(([label, value]) => (
-              <div key={label} className="rounded-lg bg-canvas p-3">
-                <dt className="text-xs text-muted">{label}</dt>
-                <dd className="text-2xl font-bold tabular-nums">{value}</dd>
+              <div key={label}>
+                <dt className="text-muted">{label}</dt>
+                <dd className="text-2xl leading-8 font-semibold">{value}</dd>
               </div>
             ))}
           </dl>
           {summary.errors.length > 0 && (
-            <div className="overflow-x-auto">
-              <p className="mb-2 text-sm text-muted">These rows were not imported. Correct them in the file and upload it again.</p>
-              <table className="w-full min-w-[32rem] text-sm">
-                <thead>
-                  <tr className="border-b border-line text-left text-xs text-muted">
-                    <th scope="col" className="py-2 pr-3 font-medium">Row</th>
-                    <th scope="col" className="py-2 pr-3 font-medium">MemberID</th>
-                    <th scope="col" className="py-2 pr-3 font-medium">Name</th>
-                    <th scope="col" className="py-2 font-medium">Problem</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {summary.errors.map((row) => (
-                    <tr key={row.row} className="border-b border-line/60 align-top">
-                      <td className="py-2 pr-3 tabular-nums">{row.row}</td>
-                      <td className="py-2 pr-3 font-mono">{row.memberId || "—"}</td>
-                      <td className="py-2 pr-3">{row.name || "—"}</td>
-                      <td className="py-2 text-danger">{row.errors.join("; ")}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div>
+              <p className="mb-2 text-muted">These rows were not imported. Correct them in the file and upload it again.</p>
+              <ul className="divide-y divide-rule border-y border-rule">
+                {summary.errors.map((row) => (
+                  <li key={row.row} className="grid gap-x-4 py-2 sm:grid-cols-[4rem_8rem_12rem_1fr]">
+                    <span className="font-medium">Row {row.row}</span>
+                    <span className="text-muted">{row.memberId || "No MemberID"}</span>
+                    <span className="break-words">{row.name || "No name"}</span>
+                    <span className="text-danger">{row.errors.join("; ")}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>
@@ -191,63 +183,93 @@ function MemberList({ refreshKey }: { refreshKey: number }) {
   }
 
   return (
-    <section aria-label="Member list" className="flex flex-col gap-3 rounded-xl border border-line bg-white p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section aria-label="Member list" className="rounded-card border border-line bg-white">
+      <div className="flex flex-wrap items-end justify-between gap-3 p-4">
         <h2 className="text-base font-semibold">All members{data ? ` (${data.total})` : ""}</h2>
-        <input
-          type="search"
-          aria-label="Search members"
-          placeholder="Member ID, name or mobile"
-          className={`${inputClass} sm:max-w-xs`}
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(1);
-          }}
-        />
+        <div className="w-full sm:w-80">
+          <Field label="Search members" htmlFor="member-list-search">
+            <input
+              id="member-list-search"
+              type="search"
+              placeholder="Member ID, name or mobile"
+              className={inputClass}
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+            />
+          </Field>
+        </div>
       </div>
 
-      {data && data.members.length === 0 && <p className="py-6 text-center text-sm text-muted">No members found.</p>}
-
-      {data && data.members.length > 0 && (
-        <div className="-mx-4 overflow-x-auto px-4">
-          <table className="w-full min-w-[48rem] text-sm">
-            <thead>
-              <tr className="border-b border-line text-left text-xs text-muted">
-                {["Member ID", "Name", "Mobile", "Gender", "Center", "Source", "Days present"].map((h) => (
-                  <th key={h} scope="col" className="py-2 pr-3 font-medium whitespace-nowrap">{h}</th>
-                ))}
-                <th scope="col" aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {data.members.map((m) => (
-                <tr key={m.id} className="border-b border-line/60">
-                  <td className="py-2 pr-3 font-mono whitespace-nowrap">{m.global_member_id ?? "—"}</td>
-                  <td className="py-2 pr-3 font-medium">{m.name}</td>
-                  <td className="py-2 pr-3 font-mono whitespace-nowrap">{m.mobile}</td>
-                  <td className="py-2 pr-3">{m.gender}</td>
-                  <td className="py-2 pr-3">{m.center}</td>
-                  <td className="py-2 pr-3 whitespace-nowrap">{SOURCE_LABEL[m.created_source]}</td>
-                  <td className="py-2 pr-3 tabular-nums">{m.attendance_count}</td>
-                  <td className="py-1 text-right whitespace-nowrap">
-                    <button type="button" onClick={() => setEditing(m)} className="min-h-9 rounded-md px-2 text-xs font-semibold text-brand hover:bg-brand-soft">Edit</button>
-                    <button type="button" onClick={() => setDeleting(m)} className="min-h-9 rounded-md px-2 text-xs font-semibold text-danger hover:bg-danger-soft">Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {data && data.members.length === 0 && (
+        <p className="border-t border-rule p-4 text-muted">
+          {search ? `No member matches “${search}”.` : "No members yet. Upload the member Excel above, or officers can add people with Quick Entry during an event."}
+        </p>
       )}
 
-      {data && (
-        <Pagination
-          page={page}
-          hasNext={page * data.pageSize < data.total}
-          onPage={setPage}
-          summary={data.total > 0 ? `Showing ${(page - 1) * data.pageSize + 1}–${Math.min(page * data.pageSize, data.total)} of ${data.total}` : undefined}
-        />
+      {data && data.members.length > 0 && (
+        <>
+          <ul className="divide-y divide-rule border-t border-rule lg:hidden">
+            {data.members.map((m) => (
+              <li key={m.id} className="flex items-start gap-1 py-2.5 pr-1.5 pl-4">
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold break-words">{m.name}</p>
+                  <p className="text-muted">{[m.global_member_id, m.mobile, m.gender, m.center].filter(Boolean).join(" · ")}</p>
+                  <p className="text-muted">{SOURCE_LABEL[m.created_source]}, present {m.attendance_count} of 3 days</p>
+                </div>
+                <RowAction tone="brand" onClick={() => setEditing(m)}>Edit</RowAction>
+                <RowAction tone="quiet" onClick={() => setDeleting(m)}>Delete</RowAction>
+              </li>
+            ))}
+          </ul>
+
+          <div className="hidden lg:block">
+            <table className="w-full">
+              <thead>
+                <tr className="border-t border-line text-left text-xs text-muted">
+                  <th scope="col" className="py-2 pr-3 pl-4 font-normal">Name</th>
+                  <th scope="col" className="py-2 pr-3 font-normal whitespace-nowrap">Member ID</th>
+                  <th scope="col" className="py-2 pr-3 font-normal">Mobile</th>
+                  <th scope="col" className="py-2 pr-3 font-normal">Gender</th>
+                  <th scope="col" className="py-2 pr-3 font-normal">Center</th>
+                  <th scope="col" className="py-2 pr-3 font-normal">Source</th>
+                  <th scope="col" className="py-2 pr-3 text-right font-normal whitespace-nowrap">Days present</th>
+                  <th scope="col" aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {data.members.map((m) => (
+                  <tr key={m.id} className="border-t border-rule">
+                    <td className="py-2 pr-3 pl-4 font-medium">{m.name}</td>
+                    <td className="py-2 pr-3 whitespace-nowrap">{m.global_member_id ?? <span className="text-muted">—</span>}</td>
+                    <td className="py-2 pr-3 whitespace-nowrap text-muted">{m.mobile}</td>
+                    <td className="py-2 pr-3 text-muted">{m.gender}</td>
+                    <td className="py-2 pr-3 text-muted">{m.center}</td>
+                    <td className="py-2 pr-3 whitespace-nowrap text-muted">{SOURCE_LABEL[m.created_source]}</td>
+                    <td className="py-2 pr-3 text-right">{m.attendance_count}</td>
+                    <td className="py-1 pr-2 text-right whitespace-nowrap">
+                      <RowAction tone="brand" onClick={() => setEditing(m)}>Edit</RowAction>
+                      <RowAction tone="quiet" onClick={() => setDeleting(m)}>Delete</RowAction>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {data && data.total > data.pageSize && (
+        <div className="border-t border-rule p-4">
+          <Pagination
+            page={page}
+            hasNext={page * data.pageSize < data.total}
+            onPage={setPage}
+            summary={`Showing ${(page - 1) * data.pageSize + 1}–${Math.min(page * data.pageSize, data.total)} of ${data.total}`}
+          />
+        </div>
       )}
 
       <Modal open={editing !== null} onClose={() => setEditing(null)} title="Edit member">
@@ -276,9 +298,9 @@ function MemberList({ refreshKey }: { refreshKey: number }) {
         message={
           deleting && (
             <>
-              Delete <strong>{deleting.name}</strong>?
+              Delete <strong className="font-semibold">{deleting.name}</strong>?
               {deleting.attendance_count > 0 && (
-                <> Their attendance for <strong>{deleting.attendance_count} day(s)</strong> will be removed from reports too.</>
+                <> Their attendance for <strong className="font-semibold">{deleting.attendance_count} day(s)</strong> will be removed from reports too.</>
               )}{" "}
               A copy is kept in the Activity Log.
             </>
@@ -320,7 +342,7 @@ function EditForm({ member, onClose, onSaved }: { member: Member; onClose: () =>
         <input id="edit-name" required maxLength={120} className={inputClass} value={form.name} onChange={set("name")} />
       </Field>
       <Field label="Mobile Number" htmlFor="edit-mobile">
-        <input id="edit-mobile" required type="tel" className={`${inputClass} font-mono`} value={form.mobile} onChange={set("mobile")} />
+        <input id="edit-mobile" required type="tel" className={inputClass} value={form.mobile} onChange={set("mobile")} />
       </Field>
       <Field label="Gender" htmlFor="edit-gender">
         <select id="edit-gender" className={inputClass} value={form.gender} onChange={set("gender")}>
@@ -335,12 +357,12 @@ function EditForm({ member, onClose, onSaved }: { member: Member; onClose: () =>
         </datalist>
       </Field>
       <Field label="Global Member ID" hint="(optional)" htmlFor="edit-id">
-        <input id="edit-id" maxLength={50} autoComplete="off" className={`${inputClass} font-mono`} value={form.globalMemberId} onChange={set("globalMemberId")} />
+        <input id="edit-id" maxLength={50} autoComplete="off" className={inputClass} value={form.globalMemberId} onChange={set("globalMemberId")} />
       </Field>
-      {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>}
+      {error && <ErrorNote>{error}</ErrorNote>}
       <div className="flex justify-end gap-2">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save"}</Button>
+        <Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save member"}</Button>
       </div>
     </form>
   );

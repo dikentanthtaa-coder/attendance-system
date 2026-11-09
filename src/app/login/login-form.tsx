@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { api, Button, ClientApiError, Field, inputClass } from "@/components/ui";
+import { api, Button, ClientApiError, ErrorNote, Field, inputClass } from "@/components/ui";
 
 export function LoginForm() {
   const [username, setUsername] = useState("");
@@ -48,7 +48,7 @@ export function LoginForm() {
           onChange={(e) => setPassword(e.target.value)}
         />
       </Field>
-      {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>}
+      {error && <ErrorNote>{error}</ErrorNote>}
       <Button type="submit" disabled={busy}>{busy ? "Logging in…" : "Log in"}</Button>
     </form>
   );

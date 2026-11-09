@@ -74,6 +74,9 @@ test("login: pre-created accounts only, no signup, wrong password refused", asyn
   female = await loginPage(browser, "female.officer");
   [adminApi, maleApi, femaleApi] = [apiOf(admin), apiOf(male), apiOf(female)];
 
+  // First run: the dashboard says what to do first.
+  await expect(admin.getByText("No members yet.")).toBeVisible();
+
   const hash = (await db`select password_hash from app_users where username = 'admin'`)[0].password_hash as string;
   expect(hash).toMatch(/^\$2[aby]\$12\$/);
 });
@@ -218,9 +221,13 @@ test("mark attendance through the UI on a phone, then Already Present", async ()
   await expect(row).toContainText("9876500004");
   await expect(row).toContainText("Bharuch");
   await row.getByRole("button", { name: "Mark Present" }).click();
-  await expect(male.getByRole("status")).toContainText("Present: Suresh Shah");
+  const confirmation = male.getByRole("status");
+  await expect(confirmation).toContainText("Present: Suresh Shah");
   await expect(box).toHaveValue("");
   await expect(box).toBeFocused();
+  // The keyboard stays open for the next person, so the confirmation has to sit above where it opens.
+  const box2 = (await confirmation.boundingBox())!;
+  expect(box2.y + box2.height).toBeLessThan(844 * 0.5);
 
   await box.fill("3001");
   await expect(male.getByRole("listitem").filter({ hasText: "Suresh Shah" })).toContainText("Already Present");
@@ -273,7 +280,7 @@ test("Quick Entry through the UI: gender automatic, attendance automatic, duplic
   await expect(male.getByText("No male member matches")).toBeVisible();
   await male.getByRole("button", { name: /Quick Entry/ }).click();
 
-  const dialog = male.getByRole("dialog");
+  const dialog = male.getByRole("region", { name: "Quick Entry" });
   await expect(dialog.getByLabel("Name")).toHaveValue("Kiran Desai");
   await expect(dialog).toContainText("saved as Male");
   await expect(dialog.getByLabel(/gender/i)).toHaveCount(0);
@@ -554,12 +561,30 @@ test("screens fit a phone with no sideways scroll; screenshots for review", asyn
   await male.getByLabel(/Search by Member ID/).fill("person19");
   await expect(male.getByRole("button", { name: "Mark Present" }).first()).toBeVisible();
   await male.screenshot({ path: `${dir}/officer-phone.png` });
+  expect(await male.locator("h1").count()).toBe(1);
+  // Numbers line up only if the font really has tabular figures.
+  const digitWidths = await male.evaluate(() => {
+    const measure = (text: string) => {
+      const span = document.createElement("span");
+      span.textContent = text;
+      span.style.cssText = "position:absolute;visibility:hidden;font-size:40px";
+      document.body.append(span);
+      const width = span.getBoundingClientRect().width;
+      span.remove();
+      return width;
+    };
+    return [measure("1111111111"), measure("0000000000"), getComputedStyle(document.body).fontFamily];
+  });
+  expect(digitWidths[0]).toBe(digitWidths[1]);
+  expect(String(digitWidths[2])).toMatch(/mukta/i);
+
   const overflow = (p: Page) => p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(await overflow(male)).toBeLessThanOrEqual(0);
 
   await male.getByRole("button", { name: /Quick Entry/ }).click();
-  await male.getByRole("dialog").getByLabel("Mobile Number").fill("9876500003");
-  await expect(male.getByRole("dialog").getByRole("alert")).toBeVisible();
+  const panel = male.getByRole("region", { name: "Quick Entry" });
+  await panel.getByLabel("Mobile Number").fill("9876500003");
+  await expect(panel.getByRole("alert")).toBeVisible();
   await male.screenshot({ path: `${dir}/quick-entry-phone.png` });
 
   await admin.goto("/admin");
@@ -570,12 +595,32 @@ test("screens fit a phone with no sideways scroll; screenshots for review", asyn
   await expect(adminPhone.getByTestId("stat-total")).toBeVisible();
   expect(await overflow(adminPhone)).toBeLessThanOrEqual(0);
   await adminPhone.screenshot({ path: `${dir}/admin-phone.png`, fullPage: true });
+  await adminPhone.getByRole("button", { name: "Filters" }).click();
+  await expect(adminPhone.getByLabel("Member source")).toBeVisible();
+  await adminPhone.getByRole("button", { name: "Filters" }).click();
   await adminPhone.goto("/admin/members");
-  await expect(adminPhone.getByRole("table")).toBeVisible();
+  await expect(adminPhone.getByRole("region", { name: "Member list" }).getByRole("listitem").first()).toBeVisible();
   expect(await overflow(adminPhone)).toBeLessThanOrEqual(0);
   await adminPhone.goto("/admin/activity");
-  await expect(adminPhone.getByRole("table")).toBeVisible();
+  await expect(adminPhone.getByRole("region", { name: "Activity" }).getByRole("listitem").first()).toBeVisible();
   expect(await overflow(adminPhone)).toBeLessThanOrEqual(0);
+});
+
+test("idle officer screen and login, for review", async ({ browser }) => {
+  const dir = "test-results/screens";
+  await male.goto("/officer");
+  const box = male.getByLabel(/Search by Member ID/);
+  for (const q of ["100001", "100003"]) {
+    await box.fill(q);
+    await male.getByRole("button", { name: "Mark Present" }).click();
+    await expect(box).toHaveValue("");
+  }
+  await expect(male.getByRole("status")).toHaveCSS("opacity", "1");
+  await male.screenshot({ path: `${dir}/officer-idle-phone.png` });
+  const fresh = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await fresh.goto("/login");
+  await fresh.screenshot({ path: `${dir}/login-phone.png` });
+  await fresh.close();
 });
 
 test("login locks briefly after repeated wrong passwords", async ({ request }) => {

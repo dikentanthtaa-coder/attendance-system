@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { Check, Circle, X } from "lucide-react";
 import { STATUS_LABEL, type EventStatus } from "@/lib/shared";
 
 export class ClientApiError extends Error {
@@ -40,10 +41,12 @@ export async function api<T>(url: string, options: { method?: string; json?: unk
 }
 
 const BUTTON_VARIANTS = {
-  primary: "bg-brand text-white hover:bg-brand-dark disabled:bg-brand/50",
-  secondary: "bg-white text-ink border border-line hover:bg-canvas disabled:text-muted",
-  danger: "bg-danger text-white hover:bg-danger/90 disabled:bg-danger/50",
-  ghost: "text-muted hover:bg-canvas hover:text-ink",
+  primary: "bg-brand text-white hover:bg-brand-dark active:bg-ink disabled:bg-active disabled:text-muted",
+  secondary: "bg-white text-ink border border-control hover:border-muted hover:bg-canvas active:bg-active disabled:text-muted disabled:bg-canvas",
+  outline: "bg-white text-brand border border-brand/60 hover:border-brand hover:bg-brand-soft active:bg-active disabled:text-muted disabled:border-control",
+  danger: "bg-danger text-white hover:bg-danger/90 active:bg-ink disabled:bg-active disabled:text-muted",
+  "danger-outline": "bg-white text-danger border border-danger/60 hover:border-danger hover:bg-danger-soft active:bg-danger-soft",
+  ghost: "text-muted hover:bg-active hover:text-ink active:bg-control/40",
 } as const;
 
 export function Button({
@@ -55,13 +58,33 @@ export function Button({
     <button
       type="button"
       {...props}
-      className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
+      className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-control px-4 text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
     />
   );
 }
 
+const ROW_ACTION_TONES = {
+  brand: "text-brand hover:bg-brand-soft",
+  // Corrections are rare, so red only appears on hover rather than down every row.
+  quiet: "text-muted hover:bg-danger-soft hover:text-danger",
+};
+
+/** A small action inside a table row or list row. */
+export function RowAction({ tone, className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { tone: keyof typeof ROW_ACTION_TONES }) {
+  return (
+    <button
+      type="button"
+      {...props}
+      className={`min-h-11 rounded-control px-2.5 text-sm font-semibold transition-colors duration-150 lg:min-h-8 ${ROW_ACTION_TONES[tone]} ${className}`}
+    />
+  );
+}
+
+/** 16px while typing, so phones don't zoom the page when the field takes focus. */
 export const inputClass =
-  "w-full min-h-11 rounded-lg border border-line bg-white px-3 text-base text-ink placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 disabled:bg-canvas";
+  "w-full min-h-11 rounded-control border border-control bg-white px-3 text-base text-ink placeholder:text-muted hover:border-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 disabled:bg-canvas";
+
+export const selectClass = `${inputClass} md:text-sm`;
 
 export function Field({ label, hint, htmlFor, children }: { label: string; hint?: string; htmlFor?: string; children: ReactNode }) {
   return (
@@ -75,18 +98,43 @@ export function Field({ label, hint, htmlFor, children }: { label: string; hint?
   );
 }
 
-const STATUS_STYLE: Record<EventStatus, { className: string; dot: string }> = {
-  not_started: { className: "bg-canvas text-muted border-line", dot: "border border-muted" },
-  active: { className: "bg-ok-soft text-ok border-ok/30", dot: "bg-ok" },
-  ended: { className: "bg-ink/5 text-ink border-ink/20", dot: "bg-ink" },
-};
+export function ErrorNote({ children }: { children: ReactNode }) {
+  return <p role="alert" className="rounded-control bg-danger-soft px-3 py-2 text-sm text-danger">{children}</p>;
+}
 
-export function StatusBadge({ status }: { status: EventStatus }) {
-  const style = STATUS_STYLE[status];
+/** The app's mark: three strokes for the three days. */
+export function Mark() {
   return (
-    <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-semibold sm:gap-1.5 sm:px-2.5 ${style.className}`}>
-      <span aria-hidden className={`size-2 rounded-full ${style.dot}`} />
-      {STATUS_LABEL[status]}
+    <svg aria-hidden viewBox="0 0 32 32" className="size-8 shrink-0">
+      <rect width="32" height="32" rx="7" fill="var(--color-brand)" />
+      <path d="M9 10v12M16 10v12M23 10v12" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Event status as an icon and a word, so it never relies on colour alone. */
+export function StatusLabel({ status }: { status: EventStatus }) {
+  const label = STATUS_LABEL[status];
+  if (status === "active") {
+    return (
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-semibold text-ok">
+        <Circle aria-hidden size={10} className="fill-ok" />
+        {label}
+      </span>
+    );
+  }
+  if (status === "ended") {
+    return (
+      <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs font-medium text-ink">
+        <Check aria-hidden size={13} strokeWidth={2.5} />
+        {label}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-muted">
+      <Circle aria-hidden size={10} />
+      {label}
     </span>
   );
 }
@@ -102,18 +150,13 @@ export function Modal({ open, onClose, title, children }: { open: boolean; onClo
   }, [open]);
 
   return (
-    <dialog
-      ref={ref}
-      onClose={onClose}
-      aria-label={title}
-      className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-xl bg-white p-0 text-ink shadow-xl"
-    >
+    <dialog ref={ref} onClose={onClose} aria-label={title} className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-card bg-white p-0 text-ink shadow-xl">
       {open && (
         <div className="flex max-h-[85dvh] flex-col">
-          <div className="flex items-center justify-between gap-4 border-b border-line px-5 py-3">
+          <div className="flex items-center justify-between gap-4 border-b border-rule py-1.5 pr-1.5 pl-5">
             <h2 className="text-base font-semibold">{title}</h2>
-            <button type="button" onClick={onClose} aria-label="Close" className="flex size-11 items-center justify-center rounded-lg text-xl text-muted hover:bg-canvas">
-              ×
+            <button type="button" onClick={onClose} aria-label="Close" className="flex size-11 items-center justify-center rounded-control text-muted hover:bg-canvas hover:text-ink">
+              <X aria-hidden size={18} />
             </button>
           </div>
           <div className="overflow-y-auto px-5 py-4">{children}</div>
@@ -144,7 +187,7 @@ export function ConfirmDialog({
 }) {
   return (
     <Modal open={open} onClose={onCancel} title={title}>
-      <div className="text-sm leading-relaxed text-ink">{message}</div>
+      <div className="text-sm leading-relaxed">{message}</div>
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="secondary" onClick={onCancel}>Cancel</Button>
         <Button variant={danger ? "danger" : "primary"} disabled={busy} onClick={onConfirm}>
@@ -173,7 +216,7 @@ export function LogoutButton() {
 }
 
 export function Pagination({ page, hasNext, onPage, summary }: { page: number; hasNext: boolean; onPage: (page: number) => void; summary?: string }) {
-  if (page === 1 && !hasNext) return summary ? <p className="px-1 text-sm text-muted">{summary}</p> : null;
+  if (page === 1 && !hasNext) return summary ? <p className="text-sm text-muted">{summary}</p> : null;
   return (
     <div className="flex items-center justify-between gap-3">
       <p className="text-sm text-muted">{summary ?? `Page ${page}`}</p>

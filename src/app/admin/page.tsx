@@ -9,7 +9,6 @@ export default async function AdminPage() {
   const events: EventSession[] = JSON.parse(JSON.stringify(await listEvents()));
   return (
     <>
-      <h1 className="sr-only">Admin dashboard</h1>
       <EventControls initialEvents={events} />
       <Dashboard />
     </>

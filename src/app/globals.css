@@ -1,15 +1,19 @@
 @import "tailwindcss";
 
+/* Tokens and the reasons behind them are in DESIGN.md. */
 @theme {
   --color-brand: #1f4e79;
   --color-brand-dark: #173b5c;
-  --color-brand-soft: #e7eff6;
-  --color-ink: #17212b;
-  --color-muted: #566270;
-  --color-line: #d9e0e7;
-  --color-canvas: #f4f6f8;
+  --color-brand-soft: #e4edf5;
+  --color-ink: #14202c;
+  --color-muted: #4f5b68;
+  --color-canvas: #f2f5f8;
+  --color-active: #e2e8ee;
+  --color-line: #dde3ea;
+  --color-rule: #edf0f4;
+  --color-control: #b9c3ce;
   --color-ok: #14663f;
-  --color-ok-soft: #e3f4ea;
+  --color-ok-soft: #e1f3e8;
   --color-warn: #8a5300;
   --color-warn-soft: #fdf1dc;
   --color-danger: #b3261e;
@@ -17,18 +21,57 @@
   /* Chart series. Validated for colour-blind separation against a light surface. */
   --color-male: #2a78d6;
   --color-female: #eb6834;
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-sans: var(--font-face), ui-sans-serif, system-ui, sans-serif;
+  --radius-card: 8px;
+  --radius-control: 6px;
 }
 
 html {
   color-scheme: light;
+  scrollbar-color: var(--color-control) transparent;
+  accent-color: var(--color-brand);
 }
 
 body {
   background: var(--color-canvas);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  font-size: 0.875rem;
+  line-height: 1.45;
+  /* Mukta Vaani closes up the space after a comma or full stop; this reopens it. */
+  word-spacing: 0.08em;
+  /* Nearly everything here is IDs, phone numbers and counts, which must line up. */
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+::selection {
+  background: var(--color-brand);
+  color: #fff;
+}
+
+input,
+select,
+textarea,
+button {
+  word-spacing: inherit;
+}
+
+input,
+textarea {
+  caret-color: var(--color-brand);
+}
+
+a {
+  text-underline-offset: 3px;
 }
 
 :focus-visible {
@@ -37,18 +80,18 @@ body {
 }
 
 dialog::backdrop {
-  background: rgb(15 23 32 / 0.5);
+  background: rgb(20 32 44 / 0.45);
 }
 
-@keyframes toast-in {
+@keyframes rise-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(-4px);
   }
 }
 
-.toast-in {
-  animation: toast-in 150ms ease-out;
+.rise-in {
+  animation: rise-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {

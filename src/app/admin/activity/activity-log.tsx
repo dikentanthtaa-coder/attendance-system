@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, Pagination } from "@/components/ui";
+import { api, ErrorNote, Pagination } from "@/components/ui";
 import { formatDateTime } from "@/lib/shared";
 
 type Entry = {
@@ -67,32 +67,49 @@ export function ActivityLog() {
 
   return (
     <>
-      <h1 className="text-xl font-bold">Activity Log</h1>
-      {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>}
-      <section className="flex flex-col gap-3 rounded-xl border border-line bg-white p-4">
-        <div className="-mx-4 overflow-x-auto px-4">
-          <table className="w-full min-w-[40rem] text-sm">
+      <h1 className="text-2xl font-semibold">Activity Log</h1>
+      {error && <ErrorNote>{error}</ErrorNote>}
+      <section aria-label="Activity" className="rounded-card border border-line bg-white">
+        {data && data.entries.length === 0 && <p className="p-4 text-muted">Nothing has happened yet. Logins, uploads, event changes and attendance appear here.</p>}
+
+        <ul className="divide-y divide-rule lg:hidden">
+          {data?.entries.map((entry) => (
+            <li key={entry.id} className="px-4 py-2.5">
+              <p className="font-semibold">{ACTION_LABEL[entry.action] ?? entry.action}</p>
+              {describe(entry) && <p className="break-words">{describe(entry)}</p>}
+              <p className="text-muted">{formatDateTime(entry.at)}, {entry.username}</p>
+            </li>
+          ))}
+        </ul>
+
+        <div className="hidden lg:block">
+          <table className="w-full">
             <thead>
-              <tr className="border-b border-line text-left text-xs text-muted">
-                <th scope="col" className="py-2 pr-3 font-medium">Time</th>
-                <th scope="col" className="py-2 pr-3 font-medium">User</th>
-                <th scope="col" className="py-2 pr-3 font-medium">Activity</th>
-                <th scope="col" className="py-2 font-medium">Details</th>
+              <tr className="text-left text-xs text-muted">
+                <th scope="col" className="py-2 pr-3 pl-4 font-normal">Time</th>
+                <th scope="col" className="py-2 pr-3 font-normal">User</th>
+                <th scope="col" className="py-2 pr-3 font-normal">Activity</th>
+                <th scope="col" className="py-2 pr-4 font-normal">Details</th>
               </tr>
             </thead>
             <tbody>
               {data?.entries.map((entry) => (
-                <tr key={entry.id} className="border-b border-line/60 align-top">
-                  <td className="py-2 pr-3 whitespace-nowrap">{formatDateTime(entry.at)}</td>
-                  <td className="py-2 pr-3 whitespace-nowrap">{entry.username}</td>
+                <tr key={entry.id} className="border-t border-rule align-top">
+                  <td className="py-2 pr-3 pl-4 whitespace-nowrap text-muted">{formatDateTime(entry.at)}</td>
+                  <td className="py-2 pr-3 whitespace-nowrap text-muted">{entry.username}</td>
                   <td className="py-2 pr-3 font-medium whitespace-nowrap">{ACTION_LABEL[entry.action] ?? entry.action}</td>
-                  <td className="py-2">{describe(entry)}</td>
+                  <td className="py-2 pr-4">{describe(entry)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        {data && <Pagination page={page} hasNext={data.hasMore} onPage={setPage} />}
+
+        {data && (page > 1 || data.hasMore) && (
+          <div className="border-t border-rule p-4">
+            <Pagination page={page} hasNext={data.hasMore} onPage={setPage} />
+          </div>
+        )}
       </section>
     </>
   );
