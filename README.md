@@ -13,6 +13,8 @@ Built with Next.js, Postgres on Supabase, and Vercel hosting.
 
 Officers log in with their email or mobile number. Until Admin approves them they can't log in, and Admin can remove access at any time.
 
+If an officer forgets their password, Admin uses **Reset password** on the Officers page. It shows a temporary password once, signs out any device they're logged in on, and makes them choose a new password at their next login.
+
 The Admin password is randomly generated and saved to `.credentials.local.txt`, which is git-ignored. To issue a new one, run `npm run seed -- --reset`.
 
 ## Setup
@@ -40,6 +42,7 @@ Schema changes go in a new file in `db/migrations/`. Apply them with `npm run mi
 Everything below is checked on the server or in the database, so it holds even for forged requests.
 
 - **Officer approval:** role and approval status are read from the database on every request, so removing access takes effect on the officer's next click, and nothing sent while registering can grant access.
+- **Password resets:** a temporary password is stored only as a hash and never logged. Until it's replaced, the server refuses every other request from that account. Each password change raises a version stored with the account and in the session cookie, which signs out older sessions.
 - **Officers can't undo attendance:** one database statement decides each mark. An officer can mark someone with no record, or change Absent to Present. Present stays as it is, even for a forged request, and only Admin's correction route can change or remove it.
 - **One active event:** a partial unique index on `event_sessions`.
 - **No duplicate attendance:** a unique constraint on member and event day.

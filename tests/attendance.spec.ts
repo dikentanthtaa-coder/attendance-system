@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import ExcelJS from "exceljs";
+import { SignJWT } from "jose";
 import postgres from "postgres";
 import { TEST_DB } from "../playwright.config";
 import { TEST_PASSWORD } from "./global-setup";
@@ -246,6 +247,105 @@ test("Admin can reject an officer or remove access, and it takes effect at once"
   await pick(admin, "Status", "Approved");
   await expect(admin.getByRole("row").filter({ hasText: "Chirag Shah" })).toHaveCount(0);
   await expect(admin.getByRole("row").filter({ hasText: OFFICER_NAME })).toHaveCount(1);
+});
+
+test("reset password: temporary password shown once, old logins end, and a new password must be chosen", async ({ browser, request }) => {
+  const person = { firstName: "Dev", lastName: "Rana", mobile: "9000077777", email: "dev.rana@gmail.com" };
+  expect((await register(request, person)).status()).toBe(201);
+  const [{ id }] = await db`select id from app_users where email = ${person.email}`;
+
+  // Not offered, and refused, until they're approved. Officers and strangers can't do it at all.
+  await admin.goto("/admin/officers");
+  await pick(admin, "Status", "All officers");
+  const row = admin.getByRole("row").filter({ hasText: "Dev Rana" });
+  await expect(row).toContainText("Waiting for approval");
+  await expect(row.getByRole("button", { name: "Reset password" })).toHaveCount(0);
+  expect((await adminApi.post(`/api/admin/officers/${id}/reset-password`, { data: {} })).status()).toBe(404);
+  await row.getByRole("button", { name: "Approve" }).click();
+  await expect(row).toContainText("Approved");
+  expect((await request.post(`/api/admin/officers/${id}/reset-password`, { data: {} })).status()).toBe(401);
+  expect((await officerApi.post(`/api/admin/officers/${id}/reset-password`, { data: {} })).status()).toBe(403);
+  const [adminRow] = await db`select id, password_hash from app_users where username = 'admin'`;
+  expect((await adminApi.post(`/api/admin/officers/${adminRow.id}/reset-password`, { data: {} })).status()).toBe(404);
+  expect((await db`select password_hash from app_users where username = 'admin'`)[0].password_hash).toBe(adminRow.password_hash);
+
+  // Logged in on a device, and locked out from guessing.
+  const device = await loginPage(browser, person.email);
+  for (let i = 0; i < 5; i++) await logIn(request, person.email, "wrong-guess");
+  expect((await logIn(request, person.email)).status()).toBe(429);
+
+  await admin.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await row.getByRole("button", { name: "Reset password" }).click();
+  await admin.getByRole("dialog").getByRole("button", { name: "Reset Password" }).click();
+  const shown = admin.getByTestId("temporary-password");
+  await expect(shown).toBeVisible();
+  const temporary = (await shown.textContent())!.trim();
+  expect(temporary).toMatch(/^[a-z2-9]{5}-[a-z2-9]{5}-[a-z2-9]{5}$/);
+  await admin.getByRole("dialog").getByRole("button", { name: "Copy" }).click();
+  await expect(admin.getByRole("dialog").getByRole("button", { name: "Copied" })).toBeVisible();
+  expect(await admin.evaluate(() => navigator.clipboard.readText())).toBe(temporary);
+  await admin.screenshot({ path: "test-results/screens/reset-password-dialog.png" });
+  await admin.getByRole("dialog").getByRole("button", { name: "Done" }).click();
+  await expect(shown).toHaveCount(0);
+
+  // The old password and the old device stop working at once, and the lockout is cleared.
+  expect((await apiOf(device).get("/api/events")).status()).toBe(401);
+  await device.waitForURL("**/login", { timeout: 8000 });
+  expect((await logIn(request, person.email)).status()).toBe(401);
+
+  // Only a hash is stored, and the password isn't in the log.
+  const [stored] = await db`select password_hash, must_change_password from app_users where id = ${id}`;
+  expect(stored.password_hash).toMatch(/^\$2[aby]\$12\$/);
+  expect(stored.must_change_password).toBe(true);
+  expect((await db`select count(*)::int as n from audit_log where action = 'officer.password_reset' and entity_id = ${id}`)[0].n).toBe(1);
+  expect((await db`select count(*)::int as n from audit_log where details::text like ${`%${temporary}%`}`)[0].n).toBe(0);
+
+  // With the temporary password, the only thing they can do is choose a new one.
+  await device.getByLabel(LOGIN_LABEL).fill(person.mobile);
+  await device.getByLabel("Password", { exact: true }).fill(temporary);
+  await device.getByRole("button", { name: "Log in" }).click();
+  await device.waitForURL("**/change-password");
+  await device.screenshot({ path: "test-results/screens/change-password.png" });
+  const api = apiOf(device);
+  for (const path of ["/api/events", "/api/officer/search?day=1&q=a"]) {
+    const blocked = await api.get(path);
+    expect(blocked.status()).toBe(403);
+    expect((await blocked.json()).code).toBe("password_change_required");
+  }
+  expect((await api.post("/api/officer/attendance", { data: { memberId: 1, eventDay: 1 } })).status()).toBe(403);
+  await device.goto("/officer");
+  await expect(device).toHaveURL(/\/change-password$/);
+  await device.goto("/");
+  await expect(device).toHaveURL(/\/change-password$/);
+
+  const change = (password: string, confirmPassword = password) => api.post("/api/auth/change-password", { data: { password, confirmPassword } });
+  expect((await change("short")).status()).toBe(400);
+  expect((await change("long-enough-1", "long-enough-2")).status()).toBe(400);
+  const same = await change(temporary);
+  expect(same.status()).toBe(400);
+  expect((await same.json()).code).toBe("same_password");
+  expect((await request.post("/api/auth/change-password", { data: { password: "long-enough-1", confirmPassword: "long-enough-1" } })).status()).toBe(401);
+
+  const fresh = "my-own-password-9";
+  await device.getByLabel("New Password").fill(fresh);
+  await device.getByLabel("Confirm Password").fill("something-else");
+  await expect(device.getByText("The two passwords don't match yet.")).toBeVisible();
+  await device.getByLabel("Confirm Password").fill(fresh);
+  await device.getByRole("button", { name: "Save New Password" }).click();
+  await device.waitForURL("**/officer");
+  expect((await apiOf(device).get("/api/events")).status()).toBe(200);
+  await device.goto("/change-password");
+  await expect(device).toHaveURL(/\/officer$/);
+
+  expect((await logIn(request, person.email, temporary)).status()).toBe(401);
+  expect((await logIn(request, person.email, fresh)).status()).toBe(200);
+  expect((await db`select must_change_password as m from app_users where id = ${id}`)[0].m).toBe(false);
+  await device.context().close();
+
+  // A session issued before this feature existed, with no version in it, still works.
+  const old = await new SignJWT({}).setProtectedHeader({ alg: "HS256" }).setSubject(adminRow.id).setIssuedAt().setExpirationTime("1d")
+    .sign(new TextEncoder().encode("test-only-secret-test-only-secret-test-only"));
+  expect((await request.get("/api/events", { headers: { Cookie: `att_session=${old}` } })).status()).toBe(200);
 });
 
 test("permissions are enforced on the server for every role", async ({ request }) => {
@@ -866,7 +966,7 @@ test("every important activity is in the audit log with user and time", async ()
   expect(actions).toEqual(expect.arrayContaining([
     "auth.login", "members.excel_upload", "event.start", "event.end", "event.restart",
     "attendance.mark", "attendance.cancel", "attendance.correct", "member.quick_entry", "member.edit", "member.delete",
-    "officer.register", "officer.approve", "officer.reject",
+    "officer.register", "officer.approve", "officer.reject", "officer.password_reset", "auth.password_change",
   ]));
   expect((await db`select count(*)::int as n from audit_log where username = '' or at is null`)[0].n).toBe(0);
 

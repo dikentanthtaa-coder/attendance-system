@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Ban, CalendarDays, Check, Mail, Phone, RotateCcw, SearchX, UsersRound } from "lucide-react";
+import { Ban, CalendarDays, Check, Copy, KeyRound, Mail, Phone, RotateCcw, SearchX, UsersRound } from "lucide-react";
 import {
   Alert,
   Button,
@@ -12,6 +12,8 @@ import {
   EmptyState,
   Field,
   MetaList,
+  Modal,
+  ModalActions,
   OfficerStatusBadge,
   PageHeader,
   Pagination,
@@ -36,6 +38,8 @@ type Officer = {
   created_at: string;
 };
 
+type ResetResult = { name: string; temporaryPassword: string };
+
 type OfficerPage = { officers: Officer[]; total: number; pending: number; pageSize: number };
 
 const STATUS_OPTIONS: SelectOption[] = [
@@ -53,6 +57,8 @@ export function OfficersAdmin() {
   const [data, setData] = useState<OfficerPage | null>(null);
   const [loadError, setLoadError] = useState("");
   const [removing, setRemoving] = useState<Officer | null>(null);
+  const [resetting, setResetting] = useState<Officer | null>(null);
+  const [resetDone, setResetDone] = useState<ResetResult | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -90,8 +96,24 @@ export function OfficersAdmin() {
     }
   }
 
+  async function resetPassword(officer: Officer) {
+    setBusyId(officer.id);
+    try {
+      setResetDone(await api<ResetResult>(`/api/admin/officers/${officer.id}/reset-password`, { json: {} }));
+    } catch (err) {
+      toast("error", (err as Error).message);
+      reload();
+    } finally {
+      setBusyId(null);
+      setResetting(null);
+    }
+  }
+
   const actions = (o: Officer) => (
     <>
+      {o.approval_status === "approved" && (
+        <Button variant="ghost" size="sm" icon={KeyRound} onClick={() => setResetting(o)}>Reset password</Button>
+      )}
       {o.approval_status !== "approved" && (
         <Button variant={o.approval_status === "pending" ? "success" : "ghost"} size="sm" icon={o.approval_status === "pending" ? Check : RotateCcw} loading={busyId === o.id} onClick={() => review(o, "approve")}>
           {o.approval_status === "pending" ? "Approve" : "Restore access"}
@@ -189,7 +211,7 @@ export function OfficersAdmin() {
                 footer={
                   <>
                     <OfficerStatusBadge status={o.approval_status} />
-                    <span className="ml-auto flex gap-1">{actions(o)}</span>
+                    <span className="ml-auto flex flex-wrap justify-end gap-1">{actions(o)}</span>
                   </>
                 }
               />
@@ -216,6 +238,59 @@ export function OfficersAdmin() {
           )
         }
       />
+
+      <ConfirmDialog
+        open={resetting !== null}
+        title="Reset password"
+        busy={busyId !== null}
+        confirmLabel="Reset Password"
+        onConfirm={() => resetting && resetPassword(resetting)}
+        onCancel={() => setResetting(null)}
+        message={
+          resetting && (
+            <>
+              Make sure this request really is from <strong className="font-semibold">{resetting.display_name}</strong>. Their current password will stop working, and any device they&apos;re logged in on will be signed out.
+            </>
+          )
+        }
+      />
+
+      <Modal open={resetDone !== null} onClose={() => setResetDone(null)} title="Temporary password">
+        {resetDone && <TemporaryPassword result={resetDone} onClose={() => setResetDone(null)} />}
+      </Modal>
     </>
+  );
+}
+
+/** Shown once: only a hash is stored, so if it's lost, Admin just resets again. */
+function TemporaryPassword({ result, onClose }: { result: ResetResult; onClose: () => void }) {
+  const [copied, setCopied] = useState<"yes" | "failed" | null>(null);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(result.temporaryPassword);
+      setCopied("yes");
+    } catch {
+      setCopied("failed");
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p>
+        Give this to <strong className="font-semibold">{result.name}</strong> privately. They log in with it, then choose their own password.
+      </p>
+      <p data-testid="temporary-password" className="rounded-control bg-canvas px-4 py-3 text-center text-xl font-bold tracking-wide break-all select-all">
+        {result.temporaryPassword}
+      </p>
+      <Alert tone="info" title="This is the only time it will be shown.">
+        If it gets lost, reset the password again.
+      </Alert>
+      {copied === "failed" && <Alert tone="warn" role="status" title="Couldn't copy automatically. Please select it and copy it yourself." />}
+      <ModalActions>
+        <Button variant="secondary" icon={copied === "yes" ? Check : Copy} onClick={copy}>{copied === "yes" ? "Copied" : "Copy"}</Button>
+        <Button onClick={onClose}>Done</Button>
+      </ModalActions>
+    </div>
   );
 }

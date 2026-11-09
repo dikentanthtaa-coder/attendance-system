@@ -12,6 +12,9 @@ export type SessionUser = {
   username: string;
   displayName: string;
   role: "admin" | "officer";
+  mustChangePassword: boolean;
+  /** Raised when a password changes, which signs out every session issued before it. */
+  sessionVersion: number;
 };
 
 export type Officer = SessionUser & { role: "officer" };
@@ -42,6 +45,7 @@ export async function verifyLogin(identifierRaw: string, password: string): Prom
 
   const [row] = await sql`
     select id, username, display_name, password_hash, role, is_active, approval_status,
+           must_change_password, session_version,
            locked_until is not null and locked_until > now() as locked
     from app_users
     where username = ${identifier} or email = ${identifier} ${mobile ? sql`or mobile = ${mobile}` : sql``}
@@ -74,12 +78,14 @@ export async function verifyLogin(identifierRaw: string, password: string): Prom
       username: row.username,
       displayName: row.display_name,
       role: row.role,
+      mustChangePassword: row.must_change_password,
+      sessionVersion: row.session_version,
     },
   };
 }
 
 export async function startSession(user: SessionUser) {
-  const token = await new SignJWT({})
+  const token = await new SignJWT({ sv: user.sessionVersion })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(user.id)
     .setIssuedAt()
@@ -109,28 +115,33 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   if (!token) return null;
 
   let userId: string | undefined;
+  let sessionVersion = 0;
   try {
     const { payload } = await jwtVerify(token, secret(), { algorithms: ["HS256"] });
     userId = payload.sub;
+    sessionVersion = typeof payload.sv === "number" ? payload.sv : 0;
   } catch {
     return null;
   }
   if (!userId) return null;
 
   const [row] = await getSql()`
-    select id, username, display_name, role
+    select id, username, display_name, role, must_change_password, session_version
     from app_users where id = ${userId} and is_active and approval_status = 'approved'`;
-  if (!row) return null;
+  if (!row || row.session_version !== sessionVersion) return null;
 
   return {
     id: row.id,
     username: row.username,
     displayName: row.display_name,
     role: row.role,
+    mustChangePassword: row.must_change_password,
+    sessionVersion: row.session_version,
   };
 });
 
 export function homeFor(user: SessionUser) {
+  if (user.mustChangePassword) return "/change-password";
   return user.role === "admin" ? "/admin" : "/officer";
 }
 
@@ -138,6 +149,6 @@ export function homeFor(user: SessionUser) {
 export async function requirePageRole<R extends SessionUser["role"]>(role: R) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  if (user.role !== role) redirect(homeFor(user));
+  if (user.mustChangePassword || user.role !== role) redirect(homeFor(user));
   return user as R extends "officer" ? Officer : SessionUser;
 }

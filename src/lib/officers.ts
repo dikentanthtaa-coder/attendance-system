@@ -5,7 +5,8 @@ import { ApiError } from "./api";
 import { writeAudit } from "./attendance";
 import type { SessionUser } from "./auth";
 import { getSql, isUniqueViolation } from "./db";
-import { MIN_PASSWORD_LENGTH, normalizeMobile, normalizeName } from "./shared";
+import { generatePassword, passwordSchema } from "./passwords";
+import { normalizeMobile, normalizeName } from "./shared";
 
 // Registration is open to anyone with the link, so this limits how fast accounts can be created.
 // It is high enough for a whole team registering together.
@@ -28,11 +29,7 @@ export const registrationSchema = z
       return mobile;
     }),
     email: z.string().max(200, "Email is too long.").trim().toLowerCase().pipe(z.email("Enter a valid email address.")),
-    password: z
-      .string()
-      .min(MIN_PASSWORD_LENGTH, `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`)
-      // bcrypt ignores everything past 72 bytes, so a longer password would be weaker than it looks.
-      .refine((v) => Buffer.byteLength(v) <= 72, "Password is too long."),
+    password: passwordSchema,
     confirmPassword: z.string(),
   })
   .refine((v) => v.password === v.confirmPassword, "Password and Confirm Password don't match.");
@@ -118,4 +115,40 @@ export async function reviewOfficer(admin: SessionUser, id: string, action: "app
   if (!officer) throw new ApiError(404, "not_found", "This officer no longer exists.");
   await writeAudit(sql, admin, `officer.${action}`, id, { name: officer.display_name });
   return { name: officer.display_name as string, status };
+}
+
+/**
+ * The temporary password is returned once, for Admin to pass on. Only its hash is stored, and it is
+ * never written to the audit log. Raising the session version signs out any device still logged in.
+ */
+export async function resetOfficerPassword(admin: SessionUser, id: string) {
+  const sql = getSql();
+  const temporaryPassword = generatePassword();
+  const hash = await bcrypt.hash(temporaryPassword, 12);
+  const [officer] = await sql`
+    update app_users
+    set password_hash = ${hash}, must_change_password = true, session_version = session_version + 1,
+        failed_attempts = 0, locked_until = null
+    where id = ${id} and role = 'officer' and is_active and approval_status = 'approved'
+    returning display_name`;
+  if (!officer) throw new ApiError(404, "not_found", "Only an approved officer's password can be reset.");
+  await writeAudit(sql, admin, "officer.password_reset", id, { name: officer.display_name });
+  return { name: officer.display_name as string, temporaryPassword };
+}
+
+/** Replaces a temporary password. Returns the user as they now are, for a new session. */
+export async function changeOwnPassword(user: SessionUser, password: string): Promise<SessionUser> {
+  const sql = getSql();
+  const [current] = await sql`select password_hash from app_users where id = ${user.id}`;
+  if (await bcrypt.compare(password, current.password_hash)) {
+    throw new ApiError(400, "same_password", "Choose a different password from the temporary one.");
+  }
+  const hash = await bcrypt.hash(password, 12);
+  const [updated] = await sql`
+    update app_users
+    set password_hash = ${hash}, must_change_password = false, session_version = session_version + 1
+    where id = ${user.id}
+    returning session_version`;
+  await writeAudit(sql, user, "auth.password_change", user.id);
+  return { ...user, mustChangePassword: false, sessionVersion: updated.session_version };
 }

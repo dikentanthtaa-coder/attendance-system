@@ -28,6 +28,8 @@ export async function api<T>(url: string, options: { method?: string; json?: unk
     // A full page load on purpose: it discards all in-memory state from the expired session.
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     if (res.status === 401 && data.code === "unauthenticated") window.location.assign("/login");
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    if (res.status === 403 && data.code === "password_change_required") window.location.assign("/change-password");
     throw new ClientApiError(res.status, data.code ?? "error", data.message ?? "Something went wrong.", data);
   }
   return data as T;

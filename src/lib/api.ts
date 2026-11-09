@@ -39,10 +39,19 @@ function guarded<U, C>(authorize: (user: SessionUser | null) => U, handler: Hand
   };
 }
 
-function signedIn(user: SessionUser | null): SessionUser {
+function loggedIn(user: SessionUser | null): SessionUser {
   if (!user) throw new ApiError(401, "unauthenticated", "Please log in again.");
   return user;
 }
+
+/** Someone logged in with a temporary password can do nothing else until they replace it. */
+function signedIn(user: SessionUser | null): SessionUser {
+  const u = loggedIn(user);
+  if (u.mustChangePassword) throw new ApiError(403, "password_change_required", "Please set a new password first.");
+  return u;
+}
+
+export const changePasswordRoute = <C = unknown>(handler: Handler<SessionUser, C>) => guarded(loggedIn, handler);
 
 export const anyUserRoute = <C = unknown>(handler: Handler<SessionUser, C>) => guarded(signedIn, handler);
 
