@@ -218,7 +218,6 @@ test("permissions are enforced on the server for every role", async ({ request }
   expect((await request.post("/api/officer/attendance", { data: { memberId: 1, eventDay: 1 } })).status()).toBe(401);
   // Officer on admin endpoints
   expect((await officerApi.get("/api/admin/report")).status()).toBe(403);
-  expect((await officerApi.get("/api/admin/report/export")).status()).toBe(403);
   expect((await setEvent(officerApi, 1, "start")).status()).toBe(403);
   expect((await upload(officerApi, await xlsx([]))).status()).toBe(403);
   expect((await officerApi.delete("/api/admin/members/1")).status()).toBe(403);
@@ -927,18 +926,6 @@ test("totals and history: each officer sees their own and the whole, and a new m
   await pick(admin, "Marked by", "Female Officer");
   await expect(admin.getByTestId("stat-total")).toHaveText(String(await dbTotal("female.officer")));
 
-  // The export follows the same filter, and carries the officer-wise totals.
-  const [download] = await Promise.all([admin.waitForEvent("download"), admin.getByRole("link", { name: "Export to Excel" }).click()]);
-  expect(download.suggestedFilename()).toBe("attendance_all-days_female-officer.xlsx");
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(await download.path());
-  const names = new Set<string>();
-  wb.getWorksheet("Attendance")!.eachRow((row, n) => { if (n > 1) names.add(String(row.getCell(9).value)); });
-  expect([...names]).toEqual(["Female Officer"]);
-  const summaryText = JSON.stringify(wb.getWorksheet("Summary")!.getSheetValues());
-  expect(summaryText).toContain("Officer-wise");
-  expect(summaryText).toContain("All officers");
-
   await admin.getByRole("button", { name: "Clear filters" }).click();
   await expect(admin.getByTestId("stat-total")).toHaveText(String(await dbTotal()));
 
@@ -1218,6 +1205,34 @@ test("dashboard: totals respond to filters and match the database", async () => 
   expect(cards).toMatch(/Total Male \d+ \d+ Present Male/);
   expect(cards).toMatch(/Total Female \d+ \d+ Present Female/);
   expect(cards).toMatch(/Total Quick Members \d+ \d+ Present Quick Members/);
+  // By event day: a column chart whose numbers match the database, with the exact figure on hover,
+  // a table for plain numbers, and no Excel export on the Dashboard any more.
+  await expect(admin.getByRole("link", { name: "Export to Excel" })).toHaveCount(0);
+  const chart = admin.getByRole("region", { name: "Event day-wise attendance" });
+  const day1 = await db`
+    select count(*) filter (where m.gender = 'Male')::int as male, count(*) filter (where m.gender = 'Female')::int as female
+    from attendance a join members m on m.id = a.member_id where a.status = 'present' and a.event_day = 1`;
+  const maleCol = chart.getByRole("button", { name: new RegExp(`^Day 1, .*: ${day1[0].male} male$`) });
+  await expect(maleCol).toHaveCount(1);
+  await expect(chart.getByRole("button", { name: new RegExp(`^Day 1, .*: ${day1[0].female} female$`) })).toHaveCount(1);
+  await maleCol.hover();
+  await expect(chart.getByRole("tooltip")).toContainText(String(day1[0].male));
+  await expect(chart.getByRole("tooltip")).toContainText("Male · Day 1");
+  await expect(chart.getByRole("img", { name: /% male \(\d+\), \d+% female/ })).toBeVisible();
+  await chart.getByRole("button", { name: "Show table" }).click();
+  await expect(chart.getByRole("row").filter({ hasText: "Gyansatr Day 1" })).toContainText(String(day1[0].male + day1[0].female));
+  await chart.getByRole("button", { name: "Show chart" }).click();
+  await pick(admin, "Gender", "Male");
+  await expect(chart.getByRole("button", { name: / female$/ })).toHaveCount(0);
+  await expect(chart.getByRole("list", { name: "Legend" })).toHaveCount(0);
+  await pick(admin, "Gender", "All");
+  for (const width of [320, 768]) {
+    await admin.setViewportSize({ width, height: 900 });
+    await expect(chart.getByRole("button", { name: / male$/ }).first()).toBeVisible();
+    expect(await admin.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+  await admin.setViewportSize({ width: 1280, height: 900 });
+
   // The totals follow the member filters too.
   await pick(admin, "Gender", "Female");
   await expect(admin.getByTestId("stat-members-male")).toHaveText("0");
@@ -1425,42 +1440,6 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   await db`delete from attendance where event_day = 3`;
   await db`update event_sessions set status = 'not_started', started_at = null, ended_at = null, started_by = null, ended_by = null where event_day = 3`;
   expect((await setEvent(adminApi, 2, "restart")).status()).toBe(200);
-});
-
-test("Excel export contains exactly the filtered data, and tells the sources apart", async () => {
-  await admin.goto("/admin");
-  await pick(admin, "Gender", "Male");
-  await pick(admin, "Event", "Gyansatr Day 1");
-  await expect(admin.getByTestId("stat-female")).toHaveText("0");
-
-  const [download] = await Promise.all([admin.waitForEvent("download"), admin.getByRole("link", { name: "Export to Excel" }).click()]);
-  expect(download.suggestedFilename()).toBe("attendance_day-1_male.xlsx");
-
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(await download.path());
-  const data = wb.getWorksheet("Attendance")!;
-  const rows: string[][] = [];
-  data.eachRow((row, n) => {
-    if (n > 1) rows.push((row.values as string[]).slice(1).map(String));
-  });
-  const expected = (await db`
-    select count(*)::int as n from attendance a join members m on m.id = a.member_id
-    where a.status = 'present' and a.event_day=1 and m.gender='Male'`)[0].n;
-  expect(rows.length).toBe(expected);
-  expect(rows.every((r) => r[4] === "Male" && r[6] === "Gyansatr Day 1")).toBe(true);
-  expect(new Set(rows.map((r) => r[9]))).toEqual(new Set(["Register", "Quick Member"]));
-  expect(rows.find((r) => r[2] === "Suresh Shah")?.[8]).toBe(OFFICER_NAME);
-
-  const summary = wb.getWorksheet("Summary")!;
-  const cells = new Map<string, unknown>();
-  summary.eachRow((row) => {
-    // "Event" is also a table header further down; the filter block comes first.
-    const key = String(row.getCell(1).value);
-    if (!cells.has(key)) cells.set(key, row.getCell(2).value);
-  });
-  expect(cells.get("Gender")).toBe("Male");
-  expect(cells.get("Event")).toBe("Gyansatr Day 1");
-  expect(cells.get("Combined attendees")).toBe(expected);
 });
 
 test("Admin corrections: remove attendance with a reason, logged, and re-markable", async () => {

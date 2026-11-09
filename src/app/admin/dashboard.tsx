@@ -1,16 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, FileUp, Inbox, Mars, Scale, SlidersHorizontal, UserPlus, UsersRound, Venus, X } from "lucide-react";
-import { Alert, Button, Card, CardHeader, EmptyState, Field, LinkButton, Select, StatCard, type SelectOption } from "@/components/ui";
+import { FileUp, Mars, Scale, SlidersHorizontal, UserPlus, UsersRound, Venus, X } from "lucide-react";
+import { Alert, Button, Card, CardHeader, Field, LinkButton, Select, StatCard, type SelectOption } from "@/components/ui";
 import { api } from "@/lib/client-api";
 import { formatDate, formatTime, SOURCE_LABEL } from "@/lib/shared";
+import { DayChart, type DayRow } from "./day-chart";
 
 type Filters = { event: string; date: string; gender: string; center: string; source: string; officer: string };
 
 const NO_FILTERS: Filters = { event: "all", date: "all", gender: "all", center: "all", source: "all", officer: "all" };
 
-type DayRow = { eventDay: number; eventName: string; date: string; male: number; female: number; total: number };
 
 type OfficerRow = { id: string; name: string; present: number };
 
@@ -96,11 +96,10 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3 md:hidden">
+      <div className="md:hidden">
         <Button variant="secondary" icon={SlidersHorizontal} aria-expanded={filtersOpen} onClick={() => setFiltersOpen((o) => !o)}>
           Filters{activeFilters > 0 ? ` (${activeFilters})` : ""}
         </Button>
-        <ExportLink query={query} />
       </div>
 
       <Card aria-label="Filters" className={`${filtersOpen ? "block" : "hidden"} p-4 md:block`}>
@@ -130,11 +129,9 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
             options={[{ value: "all", label: "All Officers" }, ...report.options.officers.map((o) => ({ value: o.id, label: o.name }))]}
           />
         </div>
-        {/* The export follows these filters, so it sits with them. */}
-        <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+        <div className="mt-3 flex min-h-9 flex-wrap items-center justify-end gap-2">
           <p className="mr-auto text-sm text-muted">Updated {formatTime(updatedAt)}</p>
           {activeFilters > 0 && <Button variant="ghost" size="sm" icon={X} onClick={() => setFilters(NO_FILTERS)}>Clear filters</Button>}
-          <div className="hidden md:block"><ExportLink query={query} /></div>
         </div>
       </Card>
 
@@ -158,7 +155,7 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
 
       <SummaryCards s={s} />
       <ByOfficer s={s} />
-      <DayWise s={s} gender={filters.gender} />
+      <DayChart rows={s.byDay} male={s.male} female={s.female} total={s.total} gender={filters.gender} />
     </>
   );
 }
@@ -173,10 +170,6 @@ function FilterSelect({ id, label, value, onChange, options }: { id: string; lab
 }
 
 /** A plain link to the same query string, so the file holds exactly what's on screen. */
-function ExportLink({ query }: { query: string }) {
-  return <LinkButton native href={`/api/admin/report/export?${query}`} icon={Download}>Export to Excel</LinkButton>;
-}
-
 /** Each card: the total in the member list first, then how many of them are present for these filters. */
 function SummaryCards({ s }: { s: Summary }) {
   const difference = s.male - s.female;
@@ -242,87 +235,5 @@ function ByOfficer({ s }: { s: Summary }) {
         </tfoot>
       </table>
     </Card>
-  );
-}
-
-function Legend() {
-  return (
-    <ul className="flex gap-3 text-sm text-muted">
-      <li className="flex items-center gap-1.5"><span aria-hidden className="size-2.5 rounded-full bg-male" />Male</li>
-      <li className="flex items-center gap-1.5"><span aria-hidden className="size-2.5 rounded-full bg-female" />Female</li>
-    </ul>
-  );
-}
-
-function DayWise({ s, gender }: { s: Summary; gender: string }) {
-  const rows = s.byDay;
-  const max = Math.max(1, ...rows.map((r) => r.total));
-  const showMale = gender !== "Female";
-  const showFemale = gender !== "Male";
-  const both = showMale && showFemale;
-  const malePercent = s.total > 0 ? Math.round((s.male / s.total) * 100) : 0;
-  return (
-    <Card aria-label="Event day-wise attendance" className="overflow-hidden">
-      <CardHeader title="By event day and date" actions={both && <Legend />} />
-      {rows.length === 0 ? (
-        <EmptyState icon={Inbox} titleAs="p" title="No attendance yet" description="Numbers appear here as officers mark people present." />
-      ) : (
-        <>
-          {both && s.total > 0 && (
-            <div className="border-b border-rule px-4 py-3 md:px-5">
-              <div className="flex gap-0.5" role="img" aria-label={`${malePercent}% male, ${100 - malePercent}% female`}>
-                {s.male > 0 && <div className="h-3 rounded-[4px] bg-male" style={{ flexGrow: s.male }} />}
-                {s.female > 0 && <div className="h-3 rounded-[4px] bg-female" style={{ flexGrow: s.female }} />}
-              </div>
-              <div className="mt-1 flex justify-between text-sm text-muted">
-                <span>Male {malePercent}%</span>
-                <span>Female {100 - malePercent}%</span>
-              </div>
-            </div>
-          )}
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-canvas text-left text-xs text-muted">
-                <th scope="col" className="py-2.5 pr-3 pl-4 font-semibold md:pl-5">Event</th>
-                <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Male</th>
-                <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Female</th>
-                <th scope="col" className="py-2.5 pr-4 text-right font-semibold md:pr-6">Total</th>
-                <th scope="col" aria-label="Chart" className="hidden w-1/2 py-2.5 pr-5 md:table-cell" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={`${r.eventDay}-${r.date}`} className="border-t border-rule">
-                  <td className="py-2.5 pr-3 pl-4 md:pl-5">
-                    <span className="block font-semibold whitespace-nowrap">{r.eventName}</span>
-                    <span className="block text-xs whitespace-nowrap text-muted">{formatDate(r.date)}</span>
-                  </td>
-                  <td className="py-2.5 pr-3 text-right">{r.male}</td>
-                  <td className="py-2.5 pr-3 text-right">{r.female}</td>
-                  <td className="py-2.5 pr-4 text-right font-bold md:pr-6">{r.total}</td>
-                  <td className="hidden py-2.5 pr-5 md:table-cell">
-                    <div className="flex gap-0.5" style={{ width: `${(r.total / max) * 100}%` }}>
-                      {showMale && r.male > 0 && <BarPart row={r} value={r.male} label="male" className="bg-male" />}
-                      {showFemale && r.female > 0 && <BarPart row={r} value={r.female} label="female" className="bg-female" />}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
-    </Card>
-  );
-}
-
-function BarPart({ row, value, label, className }: { row: DayRow; value: number; label: string; className: string }) {
-  return (
-    <div className="group relative py-1" style={{ flexGrow: value, flexBasis: 0 }}>
-      <div className={`h-3 rounded-[4px] ${className}`} />
-      <div role="tooltip" className="pointer-events-none absolute bottom-full left-0 z-10 hidden rounded-control bg-ink px-2 py-1 text-xs whitespace-nowrap text-white shadow-lg group-hover:block">
-        {row.eventName}: {value} {label} of {row.total}
-      </div>
-    </div>
   );
 }

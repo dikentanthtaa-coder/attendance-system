@@ -36,7 +36,7 @@ export function StatCard({
         <Icon aria-hidden size={16} className="shrink-0" />
         {label}
       </p>
-      <p className={`mt-1 font-bold tracking-tight tabular-nums ${tone === "hero" ? "text-4xl leading-11" : "text-3xl leading-10"}`} data-testid={testId}>{value}</p>
+      <p className={`mt-1 font-bold tracking-tight ${tone === "hero" ? "text-4xl leading-11" : "text-3xl leading-10"}`} data-testid={testId}>{value}</p>
       {secondary && (
         <p className={`mt-2 flex items-baseline gap-2 border-t pt-2 ${look.rule}`}>
           <span className="text-2xl leading-8 font-bold tracking-tight tabular-nums" data-testid={secondary.testId}>{secondary.value}</span>
