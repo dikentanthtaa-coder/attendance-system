@@ -3,7 +3,7 @@ import ExcelJS from "exceljs";
 import { z } from "zod";
 import { nameSearchPattern } from "./attendance";
 import { getSql } from "./db";
-import { dayCell, type EventStatus } from "./shared";
+import { dayCell, SOURCE_LABEL, type EventStatus, type MemberSource } from "./shared";
 
 export const DAY_REPORT_PAGE_SIZE = 50;
 
@@ -58,7 +58,7 @@ async function reportDays(sql: Sql) {
 }
 
 const rowsQuery = (sql: Sql, f: DayReportFilters) => sql`
-  select m.id, m.global_member_id, m.name, m.mobile, m.gender, m.center,
+  select m.id, m.global_member_id, m.name, m.mobile, m.gender, m.center, m.created_source,
          coalesce(array_agg(a.event_day order by a.event_day) filter (where a.status = 'present'), '{}') as present_days
   from members m
   left join attendance a on a.member_id = m.id
@@ -74,17 +74,25 @@ export async function getDayReport(f: DayReportFilters, page: number) {
     sql`select count(*)::int as total from members m where ${memberWhere(sql, f)} and ${showWhere(sql, f)}`,
     sql`select count(*)::int as everyone from members m where ${memberWhere(sql, f)}`,
     sql`
-      select a.event_day, count(*)::int as n
+      select a.event_day, count(*)::int as total, count(*) filter (where m.created_source = 'quick_entry')::int as quick
       from attendance a join members m on m.id = a.member_id
       where a.status = 'present' and ${memberWhere(sql, f)}
       group by a.event_day`,
     sql`select distinct center from members order by center`,
   ]);
-  const presentOn = new Map(present.map((r) => [r.event_day as number, r.n as number]));
+  const presentOn = new Map(present.map((r) => [r.event_day as number, { total: r.total as number, quick: r.quick as number }]));
   return {
     days: days.map((d) => {
-      const p = presentOn.get(d.day) ?? 0;
-      return { ...d, present: p, absent: d.status === "ended" ? everyone - p : null, notMarked: d.status === "active" ? everyone - p : null };
+      const { total: totalPresent, quick } = presentOn.get(d.day) ?? { total: 0, quick: 0 };
+      return {
+        ...d,
+        // Present is people from the Excel list. Present + quick = totalPresent, and totalPresent + absent = everyone.
+        present: totalPresent - quick,
+        quick,
+        totalPresent,
+        absent: d.status === "ended" ? everyone - totalPresent : null,
+        notMarked: d.status === "active" ? everyone - totalPresent : null,
+      };
     }),
     rows: rows.map((r) => ({ ...r, cells: Object.fromEntries(days.map((d) => [d.day, dayCell(d.status, (r.present_days as number[]).includes(d.day))])) })),
     total,
@@ -96,6 +104,7 @@ export async function getDayReport(f: DayReportFilters, page: number) {
 }
 
 const FILLS: Record<string, string> = { P: "FFE2F5E9", A: "FFFBE9E7", "-": "FFEDF1F5" };
+const QUICK_FILL = "FFFDF1D6";
 
 export async function buildDayReportExport(f: DayReportFilters) {
   const sql = getSql();
@@ -111,6 +120,7 @@ export async function buildDayReportExport(f: DayReportFilters) {
     { header: "Mobile", width: 14 },
     { header: "Gender", width: 9 },
     { header: "Center", width: 18 },
+    { header: "Status", width: 15 },
     ...days.map((d) => ({ header: `Day ${d.day}`, width: 8 })),
     { header: "Days Present", width: 13 },
   ];
@@ -121,32 +131,44 @@ export async function buildDayReportExport(f: DayReportFilters) {
   });
 
   const present = new Map(days.map((d) => [d.day, 0]));
+  const quick = new Map(days.map((d) => [d.day, 0]));
   rows.forEach((r, i) => {
     const marked = r.present_days as number[];
     const cells = days.map((d) => dayCell(d.status, marked.includes(d.day)));
-    const row = sheet.addRow([i + 1, r.global_member_id ?? "", r.name, r.mobile ?? "", r.gender, r.center, ...cells, marked.filter((d) => present.has(d)).length]);
+    const isQuick = r.created_source === "quick_entry";
+    const row = sheet.addRow([i + 1, r.global_member_id ?? "", r.name, r.mobile ?? "", r.gender, r.center, SOURCE_LABEL[r.created_source as MemberSource], ...cells, marked.filter((d) => present.has(d)).length]);
+    if (isQuick) {
+      const status = row.getCell(7);
+      status.font = { bold: true };
+      status.fill = { type: "pattern", pattern: "solid", fgColor: { argb: QUICK_FILL } };
+    }
     days.forEach((d, c) => {
-      if (marked.includes(d.day)) present.set(d.day, present.get(d.day)! + 1);
-      const cell = row.getCell(7 + c);
+      if (marked.includes(d.day)) {
+        present.set(d.day, present.get(d.day)! + 1);
+        if (isQuick) quick.set(d.day, quick.get(d.day)! + 1);
+      }
+      const cell = row.getCell(8 + c);
       cell.alignment = { horizontal: "center" };
       cell.font = { bold: true };
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: FILLS[cells[c]] } };
     });
   });
-  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 7 + days.length } };
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 8 + days.length } };
 
   const summary = workbook.addWorksheet("Totals");
-  summary.columns = [{ width: 18 }, { width: 12 }, { width: 10 }, { width: 10 }];
-  const top = summary.addRow(["Day", "Status", "Present", "Absent"]);
+  summary.columns = [{ width: 18 }, { width: 12 }, { width: 10 }, { width: 15 }, { width: 14 }, { width: 10 }];
+  const top = summary.addRow(["Day", "Status", "Present", SOURCE_LABEL.quick_entry, "Total Present", "Absent"]);
   top.font = { bold: true };
   for (const d of days) {
-    const p = present.get(d.day) ?? 0;
-    summary.addRow([d.name, d.status === "ended" ? "Ended" : "Running", p, d.status === "ended" ? rows.length - p : "-"]);
+    const total = present.get(d.day) ?? 0;
+    const q = quick.get(d.day) ?? 0;
+    summary.addRow([d.name, d.status === "ended" ? "Ended" : "Running", total - q, q, total, d.status === "ended" ? rows.length - total : "-"]);
   }
   summary.addRow([]);
   summary.addRow(["Members in report", rows.length]);
   summary.addRow([]);
   summary.addRow(["P = present. A = absent. - = day still running, not marked yet."]);
+  summary.addRow([`Present + ${SOURCE_LABEL.quick_entry} = Total Present.`]);
 
   const part = days.length === 3 ? "all-days" : days.length === 0 ? "no-days" : `day-${days.map((d) => d.day).join("-")}`;
   return { buffer: await workbook.xlsx.writeBuffer(), fileName: `attendance_report_${part}.xlsx` };

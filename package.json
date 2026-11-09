@@ -9,6 +9,7 @@
     "lint": "eslint",
     "migrate": "tsx --env-file-if-exists=.env.local scripts/migrate.ts",
     "seed": "tsx --env-file-if-exists=.env.local scripts/seed-users.ts",
+    "set-password": "tsx --env-file-if-exists=.env.local scripts/set-password.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

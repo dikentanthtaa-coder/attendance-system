@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, CircleCheck, Phone, Search, UserRound } from "lucide-react";
+import { DigitsField } from "@/components/digits-field";
 import { CenterSelect, centerName, centerValue, EMPTY_CENTER, type CenterValue } from "@/components/center-select";
 import { Alert, Button, Card, CardHeader, Field, Select, TextInput, type SelectOption } from "@/components/ui";
 import { api, ClientApiError } from "@/lib/client-api";
-import { normalizeMobile, normalizeName, type EventSession, type Gender } from "@/lib/shared";
+import { MEMBER_ID_DIGITS, memberIdInputValue, mobileInputValue, normalizeMobile, normalizeName, type EventSession, type Gender } from "@/lib/shared";
 
 export type QuickEntryPrefill = { name?: string; mobile?: string; globalMemberId?: string };
 
@@ -43,9 +44,10 @@ export function QuickEntryPanel({
   onSaved: (name: string, markedAt: string) => void;
   onEventChanged: () => void;
 }) {
-  const [globalMemberId, setGlobalMemberId] = useState(prefill.globalMemberId ?? "");
+  const [globalMemberId, setGlobalMemberId] = useState(memberIdInputValue(prefill.globalMemberId ?? ""));
+  const idIncomplete = globalMemberId.length > 0 && globalMemberId.length !== MEMBER_ID_DIGITS;
   const [name, setName] = useState(prefill.name ?? "");
-  const [mobile, setMobile] = useState(prefill.mobile ?? "");
+  const [mobile, setMobile] = useState(mobileInputValue(prefill.mobile ?? ""));
   const [chosenGender, setChosenGender] = useState("");
   const gender = officerGender ?? chosenGender;
   const [center, setCenter] = useState<CenterValue>(defaultCenter ? centerValue(defaultCenter) : EMPTY_CENTER);
@@ -57,6 +59,7 @@ export function QuickEntryPanel({
   const checkKey = `${cleanName.toLowerCase()}|${normalized ?? ""}`;
   const mobileRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const idRef = useRef<HTMLInputElement>(null);
 
   // Results are stored with what they were checked for, so editing either field invalidates them.
   const [check, setCheck] = useState<{ key: string; found: Duplicates } | null>(null);
@@ -83,9 +86,16 @@ export function QuickEntryPanel({
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError("");
-    if (!normalized) return setError("Enter a valid 10-digit mobile number.");
+    if (!normalized) {
+      mobileRef.current?.focus();
+      return setError(`Mobile number must be 10 digits. You entered ${mobile.length}.`);
+    }
     if (!gender) return setError("Please choose a gender.");
     if (!centerName(center)) return setError("Please choose a center. If you chose Other, type its name.");
+    if (idIncomplete) {
+      idRef.current?.focus();
+      return setError(`Member ID must be ${MEMBER_ID_DIGITS} digits. You entered ${globalMemberId.length}.`);
+    }
     if (found.exact || needsConfirmation) return;
 
     setBusy(true);
@@ -138,20 +148,22 @@ export function QuickEntryPanel({
           <TextInput id="qe-name" ref={nameRef} icon={UserRound} required maxLength={120} autoFocus={!prefill.name} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
 
-        <Field label="Mobile Number" htmlFor="qe-mobile">
-          <TextInput
-            id="qe-mobile"
-            icon={Phone}
-            ref={mobileRef}
-            required
-            type="tel"
-            inputMode="numeric"
-            autoComplete="off"
-            autoFocus={Boolean(prefill.name)}
-            value={mobile}
-            onChange={(e) => setMobile(e.target.value)}
-          />
-        </Field>
+        <DigitsField
+          id="qe-mobile"
+          label="Mobile Number"
+          digits={10}
+          icon={Phone}
+          inputRef={mobileRef}
+          required
+          type="tel"
+          autoFocus={Boolean(prefill.name)}
+          value={mobile}
+          clean={mobileInputValue}
+          onValue={(v) => {
+            setMobile(v);
+            setError("");
+          }}
+        />
 
         {found.exact && (
           <Alert tone="danger" title="This member already exists. They can't be added again.">
@@ -209,9 +221,19 @@ export function QuickEntryPanel({
           <CenterSelect id="qe-center" value={center} onChange={setCenter} />
         </Field>
 
-        <Field label="Global Member ID" hint="(optional)" htmlFor="qe-id">
-          <TextInput id="qe-id" maxLength={50} autoComplete="off" value={globalMemberId} onChange={(e) => setGlobalMemberId(e.target.value)} />
-        </Field>
+        <DigitsField
+          id="qe-id"
+          label="Global Member ID"
+          digits={MEMBER_ID_DIGITS}
+          optional
+          inputRef={idRef}
+          value={globalMemberId}
+          clean={memberIdInputValue}
+          onValue={(v) => {
+            setGlobalMemberId(v);
+            setError("");
+          }}
+        />
 
         {error && <Alert tone="danger" title={error} />}
 

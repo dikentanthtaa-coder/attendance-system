@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ApiError } from "./api";
 import type { SessionUser } from "./auth";
 import { getSql, isUniqueViolation, withTransaction } from "./db";
-import { normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName } from "./shared";
+import { isMemberIdValid, MEMBER_ID_DIGITS, normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName } from "./shared";
 
 type Sql = ReturnType<typeof getSql>;
 
@@ -175,10 +175,49 @@ export async function findDuplicates(user: SessionUser, name: string, mobile: st
   };
 }
 
+/** Optional, but a new Member ID is exactly 6 digits. */
+export const newMemberIdField = z
+  .string()
+  .optional()
+  .default("")
+  .transform((v) => v.trim())
+  .refine((v) => v === "" || isMemberIdValid(v), `Member ID must be ${MEMBER_ID_DIGITS} digits.`);
+
+export const memberNameField = z.string().max(120, "Name is too long.").transform(normalizeName).pipe(z.string().min(1, "Name is required."));
+export const memberCenterField = z.string().max(80, "Center name is too long.").transform(normalizeCenter).pipe(z.string().min(1, "Center is required."));
+
+/** Throws if another member already has this ID, naming them only if this account may see them. */
+export async function refuseTakenMemberId(tx: Sql, user: SessionUser, globalId: string) {
+  const [taken] = await tx`select name, gender from members where global_member_id = ${globalId}`;
+  if (!taken) return;
+  throw new ApiError(
+    409,
+    "member_id_taken",
+    !user.genderScope || taken.gender === user.genderScope
+      ? `Member ID ${globalId} already belongs to ${taken.name}. Search for this member instead.`
+      : `Member ID ${globalId} is already in use.`,
+  );
+}
+
+/** The same person can't be added twice. A shared mobile or name has to be confirmed first. */
+export async function refuseDuplicates(tx: Sql, user: SessionUser, name: string, mobile: string | null, confirmed: boolean) {
+  const found = await findDuplicates(user, name, mobile, tx);
+  if (found.exact) {
+    throw new ApiError(409, "member_exists", found.exact.name ? `${found.exact.name} already exists with this mobile number. Search for this member instead.` : "A member with this name and mobile number already exists.");
+  }
+  if (confirmed) return;
+  if (found.mobileMatches.length > 0) {
+    throw new ApiError(409, "duplicate_mobile", "Aa mobile number aa member sathe already registered chhe.", { matches: found.mobileMatches });
+  }
+  if (found.nameMatches.length > 0) {
+    throw new ApiError(409, "duplicate_name", "A member with this name is already registered.", { nameMatches: found.nameMatches });
+  }
+}
+
 export const quickEntrySchema = z.object({
   eventDay: eventDaySchema,
-  globalMemberId: z.string().max(50, "Member ID is too long.").optional().default(""),
-  name: z.string().max(120, "Name is too long.").transform(normalizeName).pipe(z.string().min(1, "Name is required.")),
+  globalMemberId: newMemberIdField,
+  name: memberNameField,
   mobile: z.string().transform((v, ctx) => {
     const mobile = normalizeMobile(v);
     if (!mobile) {
@@ -189,7 +228,7 @@ export const quickEntrySchema = z.object({
   }),
   // Officers can't set this: their account decides it. Only Admin chooses.
   gender: z.enum(["Male", "Female"], "Please choose a gender.").optional(),
-  center: z.string().max(80, "Center name is too long.").transform(normalizeCenter).pipe(z.string().min(1, "Center is required.")),
+  center: memberCenterField,
   confirmDuplicateMobile: z.boolean().optional().default(false),
 });
 
@@ -202,32 +241,8 @@ export async function quickEntry(user: SessionUser, input: z.output<typeof quick
     return await withTransaction(async (tx) => {
       await requireActiveEvent(tx, input.eventDay);
 
-      if (globalId) {
-        const [taken] = await tx`select name, gender from members where global_member_id = ${globalId}`;
-        if (taken) {
-          // Only name the holder if this account is allowed to see that member.
-          throw new ApiError(
-            409,
-            "member_id_taken",
-            !user.genderScope || taken.gender === user.genderScope
-              ? `Member ID ${globalId} already belongs to ${taken.name}. Search for this member instead.`
-              : `Member ID ${globalId} is already in use.`,
-          );
-        }
-      }
-
-      const found = await findDuplicates(user, input.name, input.mobile, tx);
-      if (found.exact) {
-        throw new ApiError(409, "member_exists", found.exact.name ? `${found.exact.name} already exists with this mobile number. Search for this member instead.` : "A member with this name and mobile number already exists.");
-      }
-      if (!input.confirmDuplicateMobile) {
-        if (found.mobileMatches.length > 0) {
-          throw new ApiError(409, "duplicate_mobile", "Aa mobile number aa member sathe already registered chhe.", { matches: found.mobileMatches });
-        }
-        if (found.nameMatches.length > 0) {
-          throw new ApiError(409, "duplicate_name", "A member with this name is already registered.", { nameMatches: found.nameMatches });
-        }
-      }
+      if (globalId) await refuseTakenMemberId(tx, user, globalId);
+      await refuseDuplicates(tx, user, input.name, input.mobile, input.confirmDuplicateMobile);
 
       // Always a brand-new row: an existing member with the same number is never touched.
       const [member] = await tx`

@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -261,6 +262,9 @@ test("Excel upload in the UI: summary, invalid row details, and no duplicates on
   const summary = admin.getByTestId("import-summary");
   await expect(summary).toBeVisible();
   await expect(summary.locator("dd")).toHaveText(["9", "5", "0", "4"]);
+  // Once the list is in, the upload form goes and Add Member takes its place. The result stays to read.
+  await expect(admin.getByRole("button", { name: "Upload file" })).toHaveCount(0);
+  await expect(admin.getByRole("button", { name: "Add Member" })).toBeVisible();
   await expect(summary).toContainText('Gender "X" must be M, F, Male or Female');
   await expect(summary).toContainText("not a valid 10-digit number");
   await expect(summary).toContainText("Name is missing");
@@ -329,7 +333,7 @@ test("Excel upload: real-world files with M and F, and people with no mobile num
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(admin.getByRole("status")).toContainText("Member updated");
   expect((await db`select mobile from members where id = ${none}`)[0].mobile).toBeNull();
-  const badEdit = await adminApi.patch(`/api/admin/members/${none}`, { data: { globalMemberId: "6004", name: "No Mobile Id", mobile: "123", gender: "Male", center: "Vapi" } });
+  const badEdit = await adminApi.patch(`/api/admin/members/${none}`, { data: { globalMemberId: "600400", name: "No Mobile Id", mobile: "123", gender: "Male", center: "Vapi" } });
   expect(badEdit.status()).toBe(400);
 });
 
@@ -671,6 +675,143 @@ test("Quick Entry through the UI: gender automatic, attendance automatic, duplic
   expect((await db`select count(*)::int as n from members where mobile = '9876500003'`)[0].n).toBe(2);
 });
 
+test("Quick Entry mobile number: digits only and exactly 10", async () => {
+  await officer.goto("/officer");
+  const search = officer.getByLabel(/Search by Member ID/);
+  await search.fill("Nisha Joshi");
+  await officer.getByRole("button", { name: /Quick Entry/ }).click();
+  const panel = officer.getByRole("region", { name: "Quick Entry" });
+  const box = panel.getByLabel("Mobile Number");
+
+  // Letters and symbols don't appear, and typing stops at 10 digits.
+  await box.pressSequentially("98a76-5 43210 99");
+  await expect(box).toHaveValue("9876543210");
+
+  // A pasted number loses its country code or leading 0, instead of being cut off wrongly.
+  await box.fill("+91 98765 43211");
+  await expect(box).toHaveValue("9876543211");
+  await box.fill("098765 43212");
+  await expect(box).toHaveValue("9876543212");
+
+  // Too short: says how many were entered, goes back to the box, and saves nothing.
+  await box.fill("98765");
+  await expect(panel).toContainText("5 of 10 digits");
+  await panel.getByRole("button", { name: "Save & Mark Present" }).click();
+  await expect(panel.getByRole("alert")).toContainText("Mobile number must be 10 digits. You entered 5.");
+  await expect(box).toBeFocused();
+  expect((await db`select count(*)::int as n from members where name = 'Nisha Joshi'`)[0].n).toBe(0);
+
+  // The message and the count go away once the number is complete.
+  await box.fill("9876543213");
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await expect(panel).not.toContainText("of 10 digits");
+
+  // Global Member ID: optional, but when filled in, exactly 6 digits.
+  const idBox = panel.getByLabel("Global Member ID");
+  await idBox.pressSequentially("20a6-3 83 99");
+  await expect(idBox).toHaveValue("206383");
+  await idBox.fill("2063");
+  await expect(panel).toContainText("4 of 6 digits");
+  await panel.getByLabel("Center", { exact: true }).click();
+  await panel.getByRole("option", { name: "Vapi" }).click();
+  await panel.getByRole("button", { name: "Save & Mark Present" }).click();
+  await expect(panel.getByRole("alert")).toContainText("Member ID must be 6 digits. You entered 4.");
+  await expect(idBox).toBeFocused();
+  expect((await db`select count(*)::int as n from members where name = 'Nisha Joshi'`)[0].n).toBe(0);
+  await idBox.fill("098765");
+  await expect(panel).not.toContainText("of 6 digits");
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await panel.getByRole("button", { name: "Back to search" }).click();
+
+  // A short ID searched for arrives in the box, with the count showing.
+  await search.fill("2063");
+  await officer.getByRole("button", { name: /Quick Entry/ }).click();
+  await expect(idBox).toHaveValue("2063");
+  await expect(panel).toContainText("4 of 6 digits");
+  await panel.getByRole("button", { name: "Back to search" }).click();
+
+  // A long number searched for arrives in the box as its 10 digits.
+  await search.fill("919876543214");
+  await officer.getByRole("button", { name: /Quick Entry/ }).click();
+  await expect(box).toHaveValue("9876543214");
+
+  // The server refuses a wrong length even if the screen is bypassed, and never stores a prefix.
+  for (const mobile of ["987654321", "98765432101", "abcdefghij"]) {
+    const refused = await quick(officer2Api, { name: "Wrong Length", mobile });
+    expect(refused.status()).toBe(400);
+    expect((await refused.json()).message).toContain("10-digit");
+  }
+  expect((await db`select count(*)::int as n from members where name = 'Wrong Length'`)[0].n).toBe(0);
+  for (const globalMemberId of ["2063", "2063831", "20638A", "20 6383"]) {
+    const refused = await quick(officer2Api, { name: "Wrong Id", mobile: "9876543216", globalMemberId });
+    expect(refused.status()).toBe(400);
+    expect((await refused.json()).message).toContain("6 digits");
+  }
+  expect((await db`select count(*)::int as n from members where name = 'Wrong Id'`)[0].n).toBe(0);
+  const leadingZero = await quick(officer2Api, { name: "Leading Zero", mobile: "9876543217", globalMemberId: "098766" });
+  expect(leadingZero.status()).toBe(200);
+  expect((await db`select global_member_id from members where name = 'Leading Zero'`)[0].global_member_id).toBe("098766");
+  const prefixed = await quick(officer2Api, { name: "Prefixed Number", mobile: "+91 98765 43215" });
+  expect(prefixed.status()).toBe(200);
+  expect((await db`select mobile from members where name = 'Prefixed Number'`)[0].mobile).toBe("9876543215");
+});
+
+test("Admin adds a member by hand: checked like Quick Entry, saved as Register, not marked present", async () => {
+  await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('400100', 'Family Head', '9876540001', 'Female', 'Surat', 'excel_import')`;
+  await admin.goto("/admin/members");
+  await admin.getByRole("button", { name: "Add Member" }).click();
+  const dialog = admin.getByRole("dialog", { name: "Add member" });
+
+  await dialog.getByLabel("Name").fill("Hand Added");
+  const mobile = dialog.getByLabel("Mobile Number");
+  await mobile.pressSequentially("98a76-54 00 02 9");
+  await expect(mobile).toHaveValue("9876540002");
+  await pick(admin, "Gender", "Female");
+  await dialog.getByLabel("Center", { exact: true }).click();
+  await dialog.getByRole("option", { name: "Vapi" }).click();
+  const id = dialog.getByLabel("Global Member ID");
+  await id.fill("40020");
+  await expect(dialog).toContainText("5 of 6 digits");
+  await dialog.getByRole("button", { name: "Add Member" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Member ID must be 6 digits. You entered 5.");
+  await id.fill("400200");
+  await dialog.getByRole("button", { name: "Add Member" }).click();
+  await expect(admin.getByRole("status")).toContainText("Added: Hand Added");
+  await expect(dialog).toBeHidden();
+  const [added] = await db`select id, global_member_id, mobile, gender, center, created_source from members where name = 'Hand Added'`;
+  expect(added).toMatchObject({ global_member_id: "400200", mobile: "9876540002", gender: "Female", center: "Vapi", created_source: "excel_import" });
+  expect((await db`select count(*)::int as n from attendance where member_id = ${added.id}`)[0].n).toBe(0);
+  await admin.getByLabel("Search members").fill("Hand Added");
+  await expect(admin.getByRole("row").filter({ hasText: "Hand Added" })).toContainText("Register");
+
+  // A shared mobile asks first, and Add anyway adds them.
+  await admin.getByRole("button", { name: "Add Member" }).click();
+  await dialog.getByLabel("Name").fill("Family Child");
+  await dialog.getByLabel("Mobile Number").fill("9876540001");
+  await pick(admin, "Gender", "Male");
+  await dialog.getByLabel("Center", { exact: true }).click();
+  await dialog.getByRole("option", { name: "Vapi" }).click();
+  await dialog.getByRole("button", { name: "Add Member" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Family Head");
+  await dialog.getByRole("button", { name: "Add anyway" }).click();
+  await expect(admin.getByRole("status")).toContainText("Added: Family Child");
+
+  // The server: the same person twice, a taken ID, and no gender are refused. Officers can't add.
+  const post = (data: object) => adminApi.post("/api/admin/members", { data: { center: "Vapi", gender: "Male", ...data } });
+  const twice = await post({ name: "hand added", mobile: "9876540002", gender: "Female", confirmDuplicate: true });
+  expect(twice.status()).toBe(409);
+  expect((await twice.json()).code).toBe("member_exists");
+  const taken = await post({ name: "Other Person", mobile: "9876540003", globalMemberId: "400100" });
+  expect(taken.status()).toBe(409);
+  expect((await taken.json()).message).toContain("Family Head");
+  expect((await post({ name: "No Gender", mobile: "9876540004", gender: undefined })).status()).toBe(400);
+  expect((await post({ name: "Short Id", globalMemberId: "4001" })).status()).toBe(400);
+  const noMobile = await post({ name: "Nobody Mobile" });
+  expect(noMobile.status()).toBe(200);
+  expect((await officerApi.post("/api/admin/members", { data: { name: "X", gender: "Male", center: "Vapi" } })).status()).toBe(403);
+  await db`delete from members where name in ('Hand Added', 'Family Child', 'Family Head', 'Nobody Mobile')`;
+});
+
 test("Quick Entry on the server: forged gender ignored, confirmation required, Other center, ID collisions", async () => {
   const noConfirm = await quick(officer2Api, { name: "Family Member", mobile: "9876500004" });
   expect(noConfirm.status()).toBe(409);
@@ -684,12 +825,13 @@ test("Quick Entry on the server: forged gender ignored, confirmation required, O
   expect((await db`select gender, center from members where name = 'Family Member'`)[0]).toMatchObject({ gender: "Female", center: "Surat" });
 
   // Member ID already taken by the other gender: refused without naming them.
-  const taken = await quick(officer2Api, { name: "X", mobile: "9000000002", globalMemberId: "3001" });
+  await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('300100', 'Id Owner', '9876530010', 'Male', 'Vapi', 'excel_import')`;
+  const taken = await quick(officer2Api, { name: "X", mobile: "9000000002", globalMemberId: "300100" });
   expect(taken.status()).toBe(409);
-  expect((await taken.json()).message).not.toContain("Suresh");
+  expect((await taken.json()).message).not.toContain("Id Owner");
   // Taken within the same gender: names them so the officer can search instead.
-  const taken2 = await quick(officerApi, { name: "X", mobile: "9000000002", globalMemberId: "3001" });
-  expect((await taken2.json()).message).toContain("Suresh Shah");
+  const taken2 = await quick(officerApi, { name: "X", mobile: "9000000002", globalMemberId: "300100" });
+  expect((await taken2.json()).message).toContain("Id Owner");
 
   for (const bad of [{ name: "", mobile: "9000000003" }, { name: "Y", mobile: "123" }, { name: "Y", mobile: "9000000003", center: "" }]) {
     expect((await quick(officerApi, bad)).status()).toBe(400);
@@ -1039,9 +1181,9 @@ test("dashboard: totals respond to filters and match the database", async () => 
   await expect(admin.getByTestId("stat-total")).toHaveText(String(await count("and m.center='Bharuch'")));
   await pick(admin, "Center", "All Centers");
 
-  await pick(admin, "Member source", "Quick Entry");
+  await pick(admin, "Member source", "Quick Member");
   await expect(admin.getByTestId("stat-total")).toHaveText(String(await count("and m.created_source='quick_entry'")));
-  await expect(admin.getByRole("region", { name: "Attendance records" })).toContainText("Quick Entry");
+  await expect(admin.getByRole("region", { name: "Attendance records" })).toContainText("Quick Member");
   await pick(admin, "Member source", "All");
 
   await expect(admin.getByText(/absent/i)).toHaveCount(0);
@@ -1153,14 +1295,30 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   };
   expect(await cells("Suresh Shah", 2)).toEqual(["P", "P"]);
   expect(await cells(nobody, 2)).toEqual(["A", "-"]); // ended without a mark is A; running is only "not yet"
+
+  // Status says where each person came from: Quick Entry or the Excel list.
+  await expect(table.getByRole("columnheader", { name: "Status" })).toBeVisible();
+  expect((await cells("Kiran Desai", 3))[0]).toBe("Quick Member");
+  expect((await cells("Suresh Shah", 3))[0]).toBe("Register");
   await admin.screenshot({ path: "test-results/screens/report-desktop.png" });
   await search.fill("");
 
   // The day totals match the database, and A is everyone who wasn't marked.
   const members = (await db`select count(*)::int as n from members`)[0].n as number;
   const presentOn = async (day: number) => (await db`select count(*)::int as n from attendance where event_day = ${day} and status = 'present'`)[0].n as number;
-  await expect(admin.getByTestId("day-1-present")).toHaveText(String(await presentOn(1)));
+  const quickOn = async (day: number) => (await db`select count(*)::int as n from attendance a join members m on m.id = a.member_id where a.event_day = ${day} and a.status = 'present' and m.created_source = 'quick_entry'`)[0].n as number;
+  // Present + Quick Member = Total Present, and Total Present + Absent = everyone.
+  expect(await quickOn(1)).toBeGreaterThan(0);
+  expect(await presentOn(1)).toBeGreaterThan(await quickOn(1));
+  await expect(admin.getByTestId("day-1-present")).toHaveText(String((await presentOn(1)) - (await quickOn(1))));
+  await expect(admin.getByTestId("day-1-quick")).toHaveText(String(await quickOn(1)));
+  await expect(admin.getByTestId("day-1-total")).toHaveText(String(await presentOn(1)));
   await expect(admin.getByTestId("day-1-absent")).toHaveText(String(members - (await presentOn(1))));
+  // The card reads as a sum, in this order, with Absent after it.
+  const day1Card = (await admin.getByLabel("Gyansatr Day 1 totals").innerText()).replace(/\s+/g, " ");
+  expect(day1Card).toMatch(/\d+ Present \+ \d+ Quick Member = \d+ Total Present \d+ Absent/);
+  expect((await admin.getByLabel("Gyansatr Day 2 totals").innerText()).replace(/\s+/g, " ")).toMatch(/Total Present \d+ Not marked yet/);
+  await expect(admin.getByTestId("day-2-total")).toHaveText(String(await presentOn(2)));
   await expect(admin.getByTestId("day-2-not-marked")).toHaveText(String(members - (await presentOn(2))));
   await expect(admin.getByTestId("day-2-absent")).toHaveCount(0);
 
@@ -1189,7 +1347,13 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   const [download] = await Promise.all([admin.waitForEvent("download"), admin.getByRole("link", { name: "Download Excel" }).click()]);
   expect(download.suggestedFilename()).toBe("attendance_report_day-1-2.xlsx");
   const running = await read(readFileSync(await download.path()));
-  expect(running.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Day 1", "Day 2", "Days Present"]);
+  expect(running.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Day 1", "Day 2", "Days Present"]);
+  expect(running.rows.get("Kiran Desai")!.Status).toBe("Quick Member");
+  expect(running.rows.get("Suresh Shah")!.Status).toBe("Register");
+  // The Totals sheet adds up the same way as the page.
+  const totalsRow = (running.wb.getWorksheet("Totals")!.getRow(2).values as unknown[]).slice(1);
+  expect((running.wb.getWorksheet("Totals")!.getRow(1).values as unknown[]).slice(1)).toEqual(["Day", "Status", "Present", "Quick Member", "Total Present", "Absent"]);
+  expect(totalsRow).toEqual(["Gyansatr Day 1", "Ended", (await presentOn(1)) - (await quickOn(1)), await quickOn(1), await presentOn(1), members - (await presentOn(1))]);
   expect(running.rows.size).toBe(members);
   expect(running.rows.get(nobody)).toMatchObject({ "Day 1": "A", "Day 2": "-", "Days Present": 0 });
   expect(running.rows.get("Suresh Shah")).toMatchObject({ "Day 1": "P", "Day 2": "P", "Days Present": 2 });
@@ -1211,7 +1375,7 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   const merged = await adminApi.get("/api/admin/day-report/export");
   expect(merged.headers()["content-disposition"]).toContain("attendance_report_all-days.xlsx");
   const all = await read(await merged.body());
-  expect(all.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Day 1", "Day 2", "Day 3", "Days Present"]);
+  expect(all.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Day 1", "Day 2", "Day 3", "Days Present"]);
   expect(all.rows.get(nobody)).toMatchObject({ "Day 1": "A", "Day 2": "A", "Day 3": "P", "Days Present": 1 });
   expect(all.rows.get("Suresh Shah")).toMatchObject({ "Day 1": "P", "Day 2": "P", "Day 3": "A", "Days Present": 2 });
   const totals = JSON.stringify(all.wb.getWorksheet("Totals")!.getSheetValues());
@@ -1251,7 +1415,7 @@ test("Excel export contains exactly the filtered data, and tells the sources apa
     where a.status = 'present' and a.event_day=1 and m.gender='Male'`)[0].n;
   expect(rows.length).toBe(expected);
   expect(rows.every((r) => r[4] === "Male" && r[6] === "Gyansatr Day 1")).toBe(true);
-  expect(new Set(rows.map((r) => r[9]))).toEqual(new Set(["Excel Import", "Quick Entry"]));
+  expect(new Set(rows.map((r) => r[9]))).toEqual(new Set(["Register", "Quick Member"]));
   expect(rows.find((r) => r[2] === "Suresh Shah")?.[8]).toBe(OFFICER_NAME);
 
   const summary = wb.getWorksheet("Summary")!;
@@ -1309,10 +1473,32 @@ test("Admin can edit and delete members; history stays in the log", async () => 
   await expect(admin.getByRole("status")).toContainText("Member updated");
   expect((await db`select center from members where id = ${id}`)[0].center).toBe("Vapi");
 
+  await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('205100', 'Id Holder', '9876530011', 'Male', 'Vapi', 'excel_import')`;
   const clash = await adminApi.patch(`/api/admin/members/${id}`, {
-    data: { globalMemberId: "2051", name: "Suresh Shah", mobile: "9876500004", gender: "Male", center: "Vapi" },
+    data: { globalMemberId: "205100", name: "Suresh Shah", mobile: "9876500004", gender: "Male", center: "Vapi" },
   });
   expect(clash.status()).toBe(409);
+  // A new or changed ID must be 6 digits. Suresh's older 4-digit ID can stay as it is.
+  for (const globalMemberId of ["2051", "2051000", "20510A"]) {
+    const wrong = await adminApi.patch(`/api/admin/members/${id}`, { data: { globalMemberId, name: "Suresh Shah", mobile: "9876500004", gender: "Male", center: "Vapi" } });
+    expect(wrong.status()).toBe(400);
+    expect((await wrong.json()).message).toContain("6 digits");
+  }
+  expect((await db`select global_member_id from members where id = ${id}`)[0].global_member_id).toBe("3001");
+
+  // The edit form: digits only, stops at 6, and says how many are missing.
+  await admin.getByRole("row").filter({ hasText: "Suresh Shah" }).getByRole("button", { name: "Edit" }).click();
+  const idBox = admin.getByRole("dialog").getByLabel("Global Member ID");
+  await idBox.fill("");
+  await idBox.pressSequentially("30a1-0 0 99");
+  await expect(idBox).toHaveValue("301009");
+  await idBox.fill("3010");
+  await expect(admin.getByRole("dialog")).toContainText("4 of 6 digits");
+  await admin.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await expect(admin.getByRole("dialog").getByRole("alert")).toContainText("Member ID must be 6 digits. You entered 4.");
+  await expect(idBox).toBeFocused();
+  await admin.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+  expect((await db`select global_member_id from members where id = ${id}`)[0].global_member_id).toBe("3001");
 
   await admin.getByRole("row").filter({ hasText: "Suresh Shah" }).getByRole("button", { name: "Delete" }).click();
   await expect(admin.getByRole("dialog")).toContainText("2 day(s)");
@@ -1406,11 +1592,10 @@ test("screens fit a phone with no sideways scroll; screenshots for review", asyn
   await admin.screenshot({ path: `${dir}/admin-desktop.png`, fullPage: true });
   await admin.goto("/admin/members");
   await expect(admin.getByRole("region", { name: "Member list" }).getByRole("row").nth(1)).toBeVisible();
-  // With members in place, the one-off upload box stays out of the way until asked for.
-  await expect(admin.getByRole("button", { name: "Upload file" })).toBeHidden();
-  await admin.getByRole("button", { name: "Upload Excel" }).click();
-  await expect(admin.getByRole("button", { name: "Upload file" })).toBeVisible();
-  await admin.getByRole("button", { name: "Upload Excel" }).click();
+  // With members in place, there's no upload, only Add Member.
+  await expect(admin.getByRole("button", { name: "Upload file" })).toHaveCount(0);
+  await expect(admin.getByRole("button", { name: "Upload Excel" })).toHaveCount(0);
+  await expect(admin.getByRole("button", { name: "Add Member" })).toBeVisible();
   await admin.screenshot({ path: `${dir}/members-desktop.png` });
 
   const adminPhone = await loginPage(browser, "admin", { width: 390, height: 844 });
@@ -1470,7 +1655,9 @@ test("everything clickable shows a pointer, and disabled buttons show they're bl
   await admin.keyboard.press("Escape");
 
   await admin.goto("/admin/members");
-  await admin.getByRole("button", { name: "Upload Excel" }).click();
+  await admin.getByRole("button", { name: "Add Member" }).click();
+  expect(await wrongCursors(admin)).toEqual([]);
+  await admin.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
   await admin.getByLabel("Search members").fill("Ramesh");
   await admin.getByRole("row").filter({ hasText: "Ramesh K Patel" }).getByRole("button", { name: "Edit" }).click();
   expect(await wrongCursors(admin)).toEqual([]);
@@ -1748,4 +1935,28 @@ test("login locks briefly after repeated wrong passwords", async ({ request }) =
   await db`update app_users set locked_until = null where username = 'female.officer'`;
   const fine = await logIn(request, "female.officer");
   expect(fine.status()).toBe(200);
+});
+
+test("set-password sets a chosen password, logs out that account's devices, and refuses bad input", async ({ request }) => {
+  const run = (username: string, password: string) =>
+    spawnSync("npx", ["tsx", "scripts/set-password.ts", username], { env: { ...process.env, DATABASE_URL: TEST_DB, NEW_PASSWORD: password }, encoding: "utf8" });
+
+  const before = (await db`select session_version from app_users where username = 'female.officer'`)[0].session_version as number;
+  const done = run("female.officer", "Chosen@Pass20");
+  expect(done.status).toBe(0);
+  expect(done.stdout + done.stderr).not.toContain("Chosen@Pass20"); // never printed
+  expect((await logIn(request, "female.officer", "Chosen@Pass20")).status()).toBe(200);
+  expect((await logIn(request, "female.officer")).status()).toBe(401);
+  // Devices already signed in have to log in again.
+  expect((await db`select session_version from app_users where username = 'female.officer'`)[0].session_version).toBe(before + 1);
+  expect((await officer2Api.get("/api/events")).status()).toBe(401);
+
+  const short = run("female.officer", "short");
+  expect(short.status).not.toBe(0);
+  expect(short.stderr).toContain("at least 8");
+  expect(run("someone.else", "Chosen@Pass20").status).not.toBe(0);
+  expect((await logIn(request, "female.officer", "Chosen@Pass20")).status()).toBe(200); // unchanged by the refusals
+
+  expect(run("female.officer", TEST_PASSWORD).status).toBe(0);
+  expect((await logIn(request, "female.officer")).status()).toBe(200);
 });

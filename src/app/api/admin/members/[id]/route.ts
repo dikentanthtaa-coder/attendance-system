@@ -2,7 +2,7 @@ import { z } from "zod";
 import { adminRoute, ApiError, readJson } from "@/lib/api";
 import { writeAudit } from "@/lib/attendance";
 import { isUniqueViolation, withTransaction } from "@/lib/db";
-import { normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName } from "@/lib/shared";
+import { isMemberIdValid, MEMBER_ID_DIGITS, normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName } from "@/lib/shared";
 
 type Ctx = RouteContext<"/api/admin/members/[id]">;
 
@@ -33,6 +33,10 @@ export const PATCH = adminRoute<Ctx>(async (admin, req, ctx) => {
       const [before] = await tx`
         select global_member_id, name, mobile, gender, center from members where id = ${id} for update`;
       if (!before) throw new ApiError(404, "not_found", "This member no longer exists.");
+      // A new or changed ID must be 6 digits. An older one can stay, so other details can still be corrected.
+      if (input.globalMemberId && input.globalMemberId !== before.global_member_id && !isMemberIdValid(input.globalMemberId)) {
+        throw new ApiError(400, "invalid_member_id", `Member ID must be ${MEMBER_ID_DIGITS} digits.`);
+      }
 
       await tx`
         update members set global_member_id = ${input.globalMemberId || null}, name = ${input.name},

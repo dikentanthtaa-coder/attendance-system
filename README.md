@@ -16,7 +16,7 @@ There are exactly three accounts, and no signup. `npm run seed` creates them:
 
 Each account can be logged in on many devices at once. Logging in or out on one doesn't affect the others.
 
-Passwords are randomly generated and saved to `.credentials.local.txt`, which is git-ignored. To issue new ones, run `npm run seed -- --reset`, or use **Reset password** on the Officers page, which logs out every device on that account.
+Passwords are randomly generated and saved to `.credentials.local.txt`, which is git-ignored. To issue new ones, run `npm run seed -- --reset`, or use **Reset password** on the Officers page, which logs out every device on that account. To set a password you choose, run `NEW_PASSWORD='…' npm run set-password -- male.officer` (or `admin`, `female.officer`). It also logs out every device on that account.
 
 ## The P/A report
 

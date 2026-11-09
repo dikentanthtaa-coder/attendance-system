@@ -35,9 +35,13 @@ export const STATUS_LABEL: Record<EventStatus, string> = {
   ended: "Ended",
 };
 
+/**
+ * Where a member came from. Register is the registration list: the Excel upload, or Admin adding
+ * someone by hand. Quick Member is someone an officer added at the door with Quick Entry.
+ */
 export const SOURCE_LABEL: Record<MemberSource, string> = {
-  excel_import: "Excel Import",
-  quick_entry: "Quick Entry",
+  excel_import: "Register",
+  quick_entry: "Quick Member",
 };
 
 export type EventSession = {
@@ -57,6 +61,23 @@ export function normalizeMobile(raw: string): string | null {
   if (digits.length === 12 && digits.startsWith("91")) return digits.slice(2);
   if (digits.length === 11 && digits.startsWith("0")) return digits.slice(1);
   return null;
+}
+
+/** What a mobile box shows after typing or pasting: digits only, at most 10, without a +91 or leading 0. */
+export function mobileInputValue(raw: string): string {
+  return normalizeMobile(raw) ?? raw.replace(/\D/g, "").slice(0, 10);
+}
+
+/** New Member IDs are exactly this many digits, like the ones in the registration list. */
+export const MEMBER_ID_DIGITS = 6;
+
+export function isMemberIdValid(id: string): boolean {
+  return new RegExp(`^\\d{${MEMBER_ID_DIGITS}}$`).test(id);
+}
+
+/** What a Member ID box shows after typing or pasting: digits only, at most 6. Leading zeros stay. */
+export function memberIdInputValue(raw: string): string {
+  return raw.replace(/\D/g, "").slice(0, MEMBER_ID_DIGITS);
 }
 
 /** MemberIDs are compared case-insensitively, so they are stored in upper case. */

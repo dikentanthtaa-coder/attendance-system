@@ -225,8 +225,8 @@ export async function buildExport(f: ReportFilters) {
   sheet.addRow(["Combined attendees", summary.total]);
   sheet.addRow(["Difference (Male - Female)", summary.male - summary.female]);
   sheet.addRow(["Unique members", summary.uniqueMembers]);
-  sheet.addRow(["Members from Excel Import", summary.fromExcel]);
-  sheet.addRow(["Members from Quick Entry", summary.fromQuickEntry]);
+  sheet.addRow([`Members from ${SOURCE_LABEL.excel_import}`, summary.fromExcel]);
+  sheet.addRow([`Members from ${SOURCE_LABEL.quick_entry}`, summary.fromQuickEntry]);
   sheet.addRow([]);
   sheet.addRow(["Date-wise / Event Day-wise"]).font = { bold: true };
   styleHeader(sheet.addRow(["Event", "Date", "Male", "Female", "Total"]));

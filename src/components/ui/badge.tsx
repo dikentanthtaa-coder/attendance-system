@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Check, Circle, CircleDot, FileSpreadsheet, UserPlus, type LucideIcon } from "lucide-react";
+import { Check, Circle, ClipboardList, CircleDot, UserPlus, type LucideIcon } from "lucide-react";
 import { SOURCE_LABEL, STATUS_LABEL, type DayCell, type EventStatus, type Gender, type MemberSource } from "@/lib/shared";
 
 const TONES = {
@@ -56,5 +56,5 @@ export function GenderBadge({ gender }: { gender: Gender }) {
 export function SourceBadge({ source }: { source: MemberSource }) {
   return source === "quick_entry"
     ? <Badge tone="warn" icon={UserPlus}>{SOURCE_LABEL[source]}</Badge>
-    : <Badge icon={FileSpreadsheet}>{SOURCE_LABEL[source]}</Badge>;
+    : <Badge icon={ClipboardList}>{SOURCE_LABEL[source]}</Badge>;
 }

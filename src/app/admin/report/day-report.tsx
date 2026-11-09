@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CalendarClock, Download, FileBarChart, Hash, MapPin, Phone, SearchX } from "lucide-react";
-import { Alert, Button, Card, CardHeader, DataTable, DayCellBadge, EmptyState, Field, GenderBadge, LinkButton, MetaList, PageHeader, Pagination, PersonCell, PersonRow, SearchInput, Select, StatusBadge, type Column, type SelectOption } from "@/components/ui";
+import { Alert, Button, Card, CardHeader, DataTable, DayCellBadge, EmptyState, Field, GenderBadge, LinkButton, MetaList, PageHeader, Pagination, PersonCell, PersonRow, SourceBadge, SearchInput, Select, StatusBadge, type Column, type SelectOption } from "@/components/ui";
 import { api } from "@/lib/client-api";
-import type { DayCell, EventStatus, Gender } from "@/lib/shared";
+import { SOURCE_LABEL, type DayCell, type EventStatus, type Gender, type MemberSource } from "@/lib/shared";
 
-type Day = { day: number; name: string; status: EventStatus; present: number; absent: number | null; notMarked: number | null };
+type Day = { day: number; name: string; status: EventStatus; present: number; quick: number; totalPresent: number; absent: number | null; notMarked: number | null };
 
 type Row = {
   id: number;
@@ -15,6 +15,7 @@ type Row = {
   mobile: string | null;
   gender: Gender;
   center: string;
+  created_source: MemberSource;
   present_days: number[];
   cells: Record<string, DayCell>;
 };
@@ -26,6 +27,20 @@ const GENDER_OPTIONS: SelectOption[] = [
   { value: "Male", label: "Male" },
   { value: "Female", label: "Female" },
 ];
+
+function DayStat({ value, label, tone = "", testId }: { value: number; label: string; tone?: string; testId: string }) {
+  return (
+    <p className="min-w-0">
+      <span className={`block text-2xl leading-8 font-bold tabular-nums ${tone}`} data-testid={testId}>{value}</span>
+      <span className="block text-sm leading-tight text-muted">{label}</span>
+    </p>
+  );
+}
+
+/** The + and = between the numbers, so the card reads as a sum. */
+function Op({ children }: { children: string }) {
+  return <span aria-hidden className="text-2xl leading-8 font-semibold text-muted">{children}</span>;
+}
 
 export function DayReport({ initial }: { initial: Report }) {
   const [report, setReport] = useState(initial);
@@ -77,6 +92,7 @@ export function DayReport({ initial }: { initial: Report }) {
     { key: "mobile", header: "Mobile", nowrap: true, cell: (r) => <span className="text-muted">{r.mobile ?? "—"}</span> },
     { key: "gender", header: "Gender", cell: (r) => <GenderBadge gender={r.gender} /> },
     { key: "center", header: "Center", cell: (r) => <span className="text-muted">{r.center}</span> },
+    { key: "status", header: "Status", cell: (r) => <SourceBadge source={r.created_source} /> },
     ...days.map((d): Column<Row> => ({ key: `day-${d.day}`, header: `Day ${d.day}`, align: "right", cell: (r) => <DayCellBadge value={r.cells[d.day]} /> })),
   ];
 
@@ -91,17 +107,28 @@ export function DayReport({ initial }: { initial: Report }) {
       {days.length === 0 ? (
         <Card><EmptyState icon={CalendarClock} titleAs="p" title="No day has started yet" description="The report begins when you start Day 1 on the Dashboard." /></Card>
       ) : (
-        <section aria-label="Totals by day" className="grid gap-3 sm:grid-cols-3">
+        <section aria-label="Totals by day" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {days.map((d) => (
             <Card key={d.day} className="p-4" aria-label={`${d.name} totals`}>
               <div className="flex items-center justify-between gap-2">
                 <h2 className="font-bold">{d.name}</h2>
                 <StatusBadge status={d.status} />
               </div>
-              <div className="mt-2 flex gap-5">
-                <p><span className="block text-2xl leading-8 font-bold text-ok" data-testid={`day-${d.day}-present`}>{d.present}</span><span className="text-sm text-muted">Present</span></p>
-                {d.absent !== null && <p><span className="block text-2xl leading-8 font-bold text-danger" data-testid={`day-${d.day}-absent`}>{d.absent}</span><span className="text-sm text-muted">Absent</span></p>}
-                {d.notMarked !== null && <p><span className="block text-2xl leading-8 font-bold" data-testid={`day-${d.day}-not-marked`}>{d.notMarked}</span><span className="text-sm text-muted">Not marked yet</span></p>}
+              {/* Present + Quick Member = Total Present, then Absent: beside the sum when the card has room, under it when it doesn't. */}
+              <div className="@container mt-2">
+                <div className="flex flex-col gap-3 @md:flex-row @md:items-start @md:gap-5">
+                  <div className="flex items-start gap-2.5">
+                    <DayStat value={d.present} label="Present" tone="text-ok" testId={`day-${d.day}-present`} />
+                    <Op>+</Op>
+                    <DayStat value={d.quick} label={SOURCE_LABEL.quick_entry} tone="text-warn" testId={`day-${d.day}-quick`} />
+                    <Op>=</Op>
+                    <DayStat value={d.totalPresent} label="Total Present" tone="text-brand" testId={`day-${d.day}-total`} />
+                  </div>
+                  <div className="border-t border-rule pt-3 @md:border-t-0 @md:border-l @md:pt-0 @md:pl-5">
+                    {d.absent !== null && <DayStat value={d.absent} label="Absent" tone="text-danger" testId={`day-${d.day}-absent`} />}
+                    {d.notMarked !== null && <DayStat value={d.notMarked} label="Not marked yet" testId={`day-${d.day}-not-marked`} />}
+                  </div>
+                </div>
               </div>
             </Card>
           ))}
@@ -150,11 +177,16 @@ export function DayReport({ initial }: { initial: Report }) {
                     ]}
                   />
                 }
-                footer={days.map((d) => (
-                  <span key={d.day} className="inline-flex items-center gap-1 text-xs text-muted">
-                    Day {d.day} <DayCellBadge value={r.cells[d.day]} />
-                  </span>
-                ))}
+                footer={
+                  <>
+                    <SourceBadge source={r.created_source} />
+                    {days.map((d) => (
+                      <span key={d.day} className="inline-flex items-center gap-1 text-xs text-muted">
+                        Day {d.day} <DayCellBadge value={r.cells[d.day]} />
+                      </span>
+                    ))}
+                  </>
+                }
               />
             )}
           />

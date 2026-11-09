@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { CalendarCheck, Hash, MapPin, Pencil, Phone, SearchX, Trash2, Upload, UsersRound } from "lucide-react";
-import { CenterSelect, centerName, centerValue } from "@/components/center-select";
+import { CalendarCheck, Hash, MapPin, Pencil, Phone, SearchX, Trash2, Upload, UserPlus, UsersRound } from "lucide-react";
+import { CenterSelect, centerName, centerValue, EMPTY_CENTER, type CenterValue } from "@/components/center-select";
+import { DigitsField } from "@/components/digits-field";
 import {
   Alert,
   Badge,
@@ -31,8 +32,8 @@ import {
   type Column,
   type SelectOption,
 } from "@/components/ui";
-import { api } from "@/lib/client-api";
-import type { Gender, MemberSource } from "@/lib/shared";
+import { api, ClientApiError } from "@/lib/client-api";
+import { MEMBER_ID_DIGITS, memberIdInputValue, mobileInputValue, type Gender, type MemberSource } from "@/lib/shared";
 
 type ImportSummary = {
   fileName: string;
@@ -60,30 +61,49 @@ const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 const COLUMNS = ["No", "MemberID", "Name", "Mo.no.", "Gender", "Center"];
 
 export function MembersAdmin({ initial }: { initial: MemberPage }) {
+  const toast = useToast();
   const [refreshKey, setRefreshKey] = useState(0);
-  // Uploading is a one-off job, so it only starts open with no members.
-  const [uploadOpen, setUploadOpen] = useState(initial.total === 0);
+  // The Excel list is uploaded once. After that, people are added one at a time with Add Member.
+  const [hasMembers, setHasMembers] = useState(initial.total > 0);
+  // Keeps the card after an upload so its result can still be read, without the upload form.
+  const [uploaded, setUploaded] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const refresh = () => setRefreshKey((k) => k + 1);
   return (
     <>
       <PageHeader
         title="Members"
-        description="Upload the member list, then search, correct or remove anyone in it."
-        actions={
-          <Button variant="secondary" icon={Upload} aria-expanded={uploadOpen} onClick={() => setUploadOpen((open) => !open)}>
-            Upload Excel
-          </Button>
-        }
+        description={hasMembers ? "Search, correct or remove members, or add someone new." : "Upload the member list to begin. After that, add people one at a time."}
+        actions={hasMembers && <Button icon={UserPlus} onClick={() => setAdding(true)}>Add Member</Button>}
       />
-      {/* Stays mounted while closed, so an upload's result is still there when it's reopened. */}
-      <div className={uploadOpen ? "" : "hidden"}>
-        <UploadCard onImported={() => setRefreshKey((k) => k + 1)} />
-      </div>
+      {(!hasMembers || uploaded) && (
+        <UploadCard
+          showForm={!hasMembers}
+          onImported={(summary) => {
+            setUploaded(true);
+            if (summary.imported + summary.updated > 0) setHasMembers(true);
+            refresh();
+          }}
+        />
+      )}
       <MemberList refreshKey={refreshKey} initial={initial} />
+      <Modal open={adding} onClose={() => setAdding(false)} title="Add member">
+        {adding && (
+          <AddMemberForm
+            onClose={() => setAdding(false)}
+            onAdded={(name) => {
+              setAdding(false);
+              toast("success", `Added: ${name}`);
+              refresh();
+            }}
+          />
+        )}
+      </Modal>
     </>
   );
 }
 
-function UploadCard({ onImported }: { onImported: () => void }) {
+function UploadCard({ showForm, onImported }: { showForm: boolean; onImported: (summary: ImportSummary) => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -104,7 +124,7 @@ function UploadCard({ onImported }: { onImported: () => void }) {
       form.append("file", file);
       const result = await api<ImportSummary>("/api/admin/members/import", { body: form });
       setSummary(result);
-      onImported();
+      onImported(result);
       if (fileRef.current) fileRef.current.value = "";
       setFileName("");
     } catch (err) {
@@ -116,34 +136,42 @@ function UploadCard({ onImported }: { onImported: () => void }) {
 
   return (
     <Card aria-label="Excel upload">
-      <CardHeader title="Upload member Excel" description="Gender can be M, F, Male or Female. Mo.no. can be blank. Uploading a MemberID that already exists updates that member." />
+      {showForm ? (
+        <CardHeader title="Upload member Excel" description="Gender can be M, F, Male or Female. Mo.no. can be blank. Uploading a MemberID that already exists updates that member." />
+      ) : (
+        <CardHeader title="Member list uploaded" description="Add anyone else with Add Member." />
+      )}
       <div className="flex flex-col gap-4 p-4 md:p-5">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 text-sm font-semibold">First row must have:</span>
-          {COLUMNS.map((c) => <Badge key={c} tone="brand">{c}</Badge>)}
-        </div>
+        {showForm && (
+          <>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-sm font-semibold">First row must have:</span>
+              {COLUMNS.map((c) => <Badge key={c} tone="brand">{c}</Badge>)}
+            </div>
 
-        <form onSubmit={submit} className="flex flex-col gap-3">
-          <FileDrop
-            label="Excel file"
-            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            note=".xlsx file, up to 4 MB"
-            fileName={fileName}
-            inputRef={fileRef}
-            onChange={(name) => {
-              setFileName(name);
-              setError("");
-            }}
-          />
-          <Button type="submit" icon={Upload} loading={busy} disabled={!fileName} className="self-end">
-            {busy ? "Uploading…" : "Upload file"}
-          </Button>
-        </form>
+            <form onSubmit={submit} className="flex flex-col gap-3">
+              <FileDrop
+                label="Excel file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                note=".xlsx file"
+                fileName={fileName}
+                inputRef={fileRef}
+                onChange={(name) => {
+                  setFileName(name);
+                  setError("");
+                }}
+              />
+              <Button type="submit" icon={Upload} loading={busy} disabled={!fileName} className="self-end">
+                {busy ? "Uploading…" : "Upload file"}
+              </Button>
+            </form>
+          </>
+        )}
 
         {error && <Alert tone="danger" title={error} />}
 
         {summary && (
-          <div className="flex flex-col gap-3 border-t border-rule pt-4" data-testid="import-summary">
+          <div className={`flex flex-col gap-3 ${showForm ? "border-t border-rule pt-4" : ""}`} data-testid="import-summary">
             <p className="font-semibold break-all">Upload result: {summary.fileName}</p>
             <StatList
               items={[
@@ -240,28 +268,27 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
 
   return (
     <Card aria-label="Member list" className="overflow-hidden">
-      <CardHeader
-        title={`All members (${data.total})`}
-        actions={
-          <div className="w-full sm:w-80">
-            <Field label="Search members" htmlFor="member-list-search">
-              <SearchInput
-                id="member-list-search"
-                placeholder="Member ID, name or mobile"
-                value={search}
-                onClear={() => {
-                  setSearch("");
-                  setPage(1);
-                }}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-              />
-            </Field>
-          </div>
-        }
-      />
+      {/* Search first and wide, on the left. The count sits to its right, or above it on a phone. */}
+      <div className="flex flex-col-reverse gap-2 border-b border-rule px-4 py-3.5 sm:flex-row sm:items-end sm:gap-4 md:px-5">
+        <div className="w-full sm:w-3/4">
+          <Field label="Search members" htmlFor="member-list-search">
+            <SearchInput
+              id="member-list-search"
+              placeholder="Member ID, name or mobile"
+              value={search}
+              onClear={() => {
+                setSearch("");
+                setPage(1);
+              }}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+            />
+          </Field>
+        </div>
+        <h2 className="min-w-0 text-base font-semibold sm:flex-1 sm:pb-2.5 sm:text-right">All members ({data.total})</h2>
+      </div>
 
       {loadError && (
         <div className="p-4">
@@ -364,10 +391,27 @@ function EditForm({ member, onClose, onSaved }: { member: Member; onClose: () =>
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [key]: e.target.value }));
+  const setValue = (key: keyof typeof form) => (value: string) => {
+    setForm((f) => ({ ...f, [key]: value }));
+    setError("");
+  };
+  const mobileRef = useRef<HTMLInputElement>(null);
+  const idRef = useRef<HTMLInputElement>(null);
+  // Only a new or changed ID has to be 6 digits, so an older one doesn't stop other corrections.
+  const idChanged = form.globalMemberId !== (member.global_member_id ?? "");
+  const idIncomplete = idChanged && form.globalMemberId.length > 0 && form.globalMemberId.length !== MEMBER_ID_DIGITS;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (form.mobile && form.mobile.length !== 10) {
+      mobileRef.current?.focus();
+      return setError(`Mobile number must be 10 digits. You entered ${form.mobile.length}.`);
+    }
     if (!centerName(center)) return setError("Please choose a center. If you chose Other, type its name.");
+    if (idIncomplete) {
+      idRef.current?.focus();
+      return setError(`Member ID must be ${MEMBER_ID_DIGITS} digits. You entered ${form.globalMemberId.length}.`);
+    }
     setBusy(true);
     setError("");
     try {
@@ -384,22 +428,131 @@ function EditForm({ member, onClose, onSaved }: { member: Member; onClose: () =>
       <Field label="Name" htmlFor="edit-name">
         <TextInput id="edit-name" required maxLength={120} value={form.name} onChange={set("name")} />
       </Field>
-      <Field label="Mobile Number" hint="(optional)" htmlFor="edit-mobile">
-        <TextInput id="edit-mobile" type="tel" value={form.mobile} onChange={set("mobile")} />
-      </Field>
+      <DigitsField id="edit-mobile" label="Mobile Number" digits={10} optional type="tel" inputRef={mobileRef} value={form.mobile} clean={mobileInputValue} onValue={setValue("mobile")} />
       <Field label="Gender" htmlFor="edit-gender">
         <Select id="edit-gender" value={form.gender} onChange={(gender) => setForm((f) => ({ ...f, gender }))} options={GENDER_OPTIONS} />
       </Field>
       <Field label="Center" htmlFor="edit-center">
         <CenterSelect id="edit-center" value={center} onChange={setCenter} />
       </Field>
-      <Field label="Global Member ID" hint="(optional)" htmlFor="edit-id">
-        <TextInput id="edit-id" maxLength={50} autoComplete="off" value={form.globalMemberId} onChange={set("globalMemberId")} />
-      </Field>
+      <DigitsField
+        id="edit-id"
+        label="Global Member ID"
+        digits={MEMBER_ID_DIGITS}
+        optional
+        showCount={idChanged}
+        inputRef={idRef}
+        value={form.globalMemberId}
+        clean={memberIdInputValue}
+        onValue={setValue("globalMemberId")}
+      />
       {error && <Alert tone="danger" title={error} />}
       <ModalActions>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button type="submit" loading={busy}>{busy ? "Saving…" : "Save member"}</Button>
+      </ModalActions>
+    </form>
+  );
+}
+
+type NameMatch = { name: string; memberId: string | null; mobile: string | null; center: string };
+
+/** One person at a time, after the Excel list is in. Checked like Quick Entry, but not marked present. */
+function AddMemberForm({ onClose, onAdded }: { onClose: () => void; onAdded: (name: string) => void }) {
+  const [name, setName] = useState("");
+  const [mobile, setMobile] = useState("");
+  const [gender, setGender] = useState("");
+  const [center, setCenter] = useState<CenterValue>(EMPTY_CENTER);
+  const [globalMemberId, setGlobalMemberId] = useState("");
+  const [error, setError] = useState("");
+  const [warning, setWarning] = useState<{ title: string; people: string[]; why: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const mobileRef = useRef<HTMLInputElement>(null);
+  const idRef = useRef<HTMLInputElement>(null);
+
+  // Any change means the warning no longer fits what's typed, so it goes until the next save.
+  const edit = (set: (value: string) => void) => (value: string) => {
+    set(value);
+    setError("");
+    setWarning(null);
+  };
+
+  async function save(confirmDuplicate: boolean) {
+    setError("");
+    if (mobile && mobile.length !== 10) {
+      mobileRef.current?.focus();
+      return setError(`Mobile number must be 10 digits. You entered ${mobile.length}.`);
+    }
+    if (!gender) return setError("Please choose a gender.");
+    if (!centerName(center)) return setError("Please choose a center. If you chose Other, type its name.");
+    if (globalMemberId && globalMemberId.length !== MEMBER_ID_DIGITS) {
+      idRef.current?.focus();
+      return setError(`Member ID must be ${MEMBER_ID_DIGITS} digits. You entered ${globalMemberId.length}.`);
+    }
+    setBusy(true);
+    try {
+      const saved = await api<{ memberName: string }>("/api/admin/members", {
+        json: { name, mobile, gender, center: centerName(center), globalMemberId, confirmDuplicate },
+      });
+      onAdded(saved.memberName);
+    } catch (err) {
+      setBusy(false);
+      if (err instanceof ClientApiError && err.code === "duplicate_mobile") {
+        return setWarning({ title: err.message, people: err.data.matches as string[], why: "Family members can share a number." });
+      }
+      if (err instanceof ClientApiError && err.code === "duplicate_name") {
+        const people = (err.data.nameMatches as NameMatch[]).map((m) => [m.name, m.memberId, m.mobile, m.center].filter(Boolean).join(" · "));
+        return setWarning({ title: err.message, people, why: "Two people can share a name." });
+      }
+      setError((err as Error).message);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        save(false);
+      }}
+      className="flex flex-col gap-4"
+    >
+      <Field label="Name" htmlFor="add-name">
+        <TextInput id="add-name" required autoFocus maxLength={120} value={name} onChange={(e) => edit(setName)(e.target.value)} />
+      </Field>
+      <DigitsField id="add-mobile" label="Mobile Number" digits={10} optional type="tel" inputRef={mobileRef} value={mobile} clean={mobileInputValue} onValue={edit(setMobile)} />
+      <Field label="Gender" htmlFor="add-gender">
+        <Select id="add-gender" value={gender} onChange={edit(setGender)} options={GENDER_OPTIONS} placeholder="Choose gender" />
+      </Field>
+      <Field label="Center" htmlFor="add-center">
+        <CenterSelect
+          id="add-center"
+          value={center}
+          onChange={(value) => {
+            setCenter(value);
+            setError("");
+            setWarning(null);
+          }}
+        />
+      </Field>
+      <DigitsField id="add-id" label="Global Member ID" digits={MEMBER_ID_DIGITS} optional inputRef={idRef} value={globalMemberId} clean={memberIdInputValue} onValue={edit(setGlobalMemberId)} />
+
+      {warning && (
+        <Alert tone="warn" title={warning.title}>
+          <ul className="font-semibold">
+            {warning.people.map((p, i) => <li key={i}>{p}</li>)}
+          </ul>
+          <p className="mt-2">{warning.why} Adding anyway creates a separate member and doesn&apos;t change the existing one.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setWarning(null)}>Go back</Button>
+            <Button loading={busy} onClick={() => save(true)}>Add anyway</Button>
+          </div>
+        </Alert>
+      )}
+      {error && <Alert tone="danger" title={error} />}
+
+      <ModalActions>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button type="submit" icon={UserPlus} loading={busy} disabled={warning !== null}>{busy ? "Adding…" : "Add Member"}</Button>
       </ModalActions>
     </form>
   );

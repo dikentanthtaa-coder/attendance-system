@@ -27,7 +27,7 @@ import {
   type SelectOption,
 } from "@/components/ui";
 import { api } from "@/lib/client-api";
-import { formatDate, formatDateTime, formatTime, type Gender, type MemberSource } from "@/lib/shared";
+import { formatDate, formatDateTime, formatTime, SOURCE_LABEL, type Gender, type MemberSource } from "@/lib/shared";
 
 type Filters = { event: string; date: string; gender: string; center: string; source: string; officer: string };
 
@@ -88,8 +88,8 @@ const GENDER_OPTIONS: SelectOption[] = [
 
 const SOURCE_OPTIONS: SelectOption[] = [
   { value: "all", label: "All" },
-  { value: "excel_import", label: "Excel Import" },
-  { value: "quick_entry", label: "Quick Entry" },
+  { value: "excel_import", label: SOURCE_LABEL.excel_import },
+  { value: "quick_entry", label: SOURCE_LABEL.quick_entry },
 ];
 
 const shortEvent = (r: AttendanceRecord) => r.event_name.replace("Gyansatr ", "");
@@ -216,7 +216,7 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
           title="Attendance report"
           description={
             <>
-              {s.total} records: {s.fromExcel} Excel Import, {s.fromQuickEntry} Quick Entry. Updated {formatTime(updatedAt)}
+              {s.total} records: {s.fromExcel} {SOURCE_LABEL.excel_import}, {s.fromQuickEntry} {SOURCE_LABEL.quick_entry}. Updated {formatTime(updatedAt)}
             </>
           }
           actions={<div className="hidden md:block"><ExportLink query={query} /></div>}
