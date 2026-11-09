@@ -17,6 +17,11 @@ export function getSql(): Sql {
   store.__sql = postgres(url, {
     prepare: false,
     max: 5,
+    // Supabase's transaction pooler stalls when several queries are sent down one connection without
+    // waiting for answers, which this library does by default. One at a time per connection.
+    max_pipeline: 1,
+    // If a query still gets stuck, the request fails and can be retried, rather than hanging for minutes.
+    query_timeout: 20,
     idle_timeout: 20,
     connect_timeout: 10,
     ssl: local ? false : "require",

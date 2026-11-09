@@ -16,13 +16,15 @@ const VARIANTS = {
 
 const SIZES = {
   // Rows are dense on a desktop table, but a phone still needs a 44px target.
-  sm: "min-h-11 gap-1.5 px-2.5 text-sm whitespace-nowrap lg:min-h-9",
-  md: "min-h-11 gap-2 px-4 text-sm whitespace-nowrap",
+  sm: "min-h-11 gap-1.5 rounded-control px-2.5 text-sm whitespace-nowrap lg:min-h-9",
+  md: "min-h-11 gap-2 rounded-control px-4 text-sm whitespace-nowrap",
+  // A small round button for a list with one action on every row.
+  pill: "min-h-10 gap-1.5 rounded-full px-4 text-sm whitespace-nowrap lg:min-h-9",
   // Large buttons hold full sentences, which may wrap on the narrowest phones.
-  lg: "min-h-13 gap-2 px-4 py-2 text-center text-base sm:px-6",
+  lg: "min-h-13 gap-2 rounded-control px-4 py-2 text-center text-base sm:px-6",
 } as const;
 
-const ICON_SIZE = { sm: 15, md: 16, lg: 20 } as const;
+const ICON_SIZE = { sm: 15, md: 16, pill: 15, lg: 20 } as const;
 
 export type ButtonVariant = keyof typeof VARIANTS;
 export type ButtonSize = keyof typeof SIZES;
@@ -30,7 +32,7 @@ export type ButtonSize = keyof typeof SIZES;
 type Look = { variant?: ButtonVariant; size?: ButtonSize; icon?: LucideIcon };
 
 const look = (variant: ButtonVariant, size: ButtonSize, className: string) =>
-  `inline-flex items-center justify-center rounded-control font-semibold transition-colors duration-150 disabled:cursor-not-allowed ${SIZES[size]} ${VARIANTS[variant]} ${className}`;
+  `inline-flex items-center justify-center font-semibold transition-colors duration-150 disabled:cursor-not-allowed ${SIZES[size]} ${VARIANTS[variant]} ${className}`;
 
 export function Button({
   variant = "primary",

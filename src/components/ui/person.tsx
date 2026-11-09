@@ -23,10 +23,11 @@ export type MetaItem = { icon: LucideIcon; label: ReactNode; strong?: boolean };
 /** Short facts about a person or record, each with its own icon. Empty values are left out. */
 export function MetaList({ items }: { items: (MetaItem | null | undefined | false)[] }) {
   return (
-    <p className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-sm text-muted">
+    <p className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-xs text-muted sm:gap-x-3 sm:text-sm">
       {items.filter((item): item is MetaItem => Boolean(item)).map(({ icon: Icon, label, strong }, i) => (
         <span key={i} className={`inline-flex items-center gap-1 ${strong ? "font-semibold text-ink" : ""}`}>
-          <Icon aria-hidden size={13} className="shrink-0" />
+          {/* Plain text on phones, so an ID and a number fit on one line beside the button. */}
+          <Icon aria-hidden size={13} className="shrink-0 max-sm:hidden" />
           {label}
         </span>
       ))}
@@ -41,7 +42,7 @@ export function PersonRow({
   meta,
   footer,
   actions,
-  actionsBelowOnPhone,
+  nameBadge,
   hideAvatarOnPhone,
 }: {
   name: string;
@@ -49,19 +50,22 @@ export function PersonRow({
   meta: ReactNode;
   footer?: ReactNode;
   actions?: ReactNode;
-  /** For two or more large buttons, which would squeeze the name on a phone. */
-  actionsBelowOnPhone?: boolean;
+  /** Sits beside the name, so a row stays compact. */
+  nameBadge?: ReactNode;
   hideAvatarOnPhone?: boolean;
 }) {
   return (
-    <div className={`flex items-center gap-3 px-4 py-3 ${actionsBelowOnPhone ? "flex-wrap sm:flex-nowrap" : ""}`}>
+    <div className="flex items-center gap-3 px-4 py-2.5 sm:py-3">
       <Avatar name={name} gender={gender} className={`self-start ${hideAvatarOnPhone ? "hidden sm:flex" : ""}`} />
-      <div className={`min-w-0 flex-1 ${actionsBelowOnPhone ? "basis-3/5" : ""}`}>
-        <p className="text-base font-semibold break-words">{name}</p>
+      <div className="min-w-0 flex-1">
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm leading-snug font-semibold break-words sm:text-base">
+          {name}
+          {nameBadge}
+        </p>
         {meta}
         {footer && <div className="mt-1.5 flex flex-wrap items-center gap-1.5">{footer}</div>}
       </div>
-      {actions && <div className={`flex shrink-0 items-center ${actionsBelowOnPhone ? "w-full gap-2 sm:w-auto [&>button]:flex-1" : "gap-1"}`}>{actions}</div>}
+      {actions && <div className="flex shrink-0 items-center gap-1">{actions}</div>}
     </div>
   );
 }

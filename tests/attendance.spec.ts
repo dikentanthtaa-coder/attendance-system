@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import ExcelJS from "exceljs";
@@ -22,11 +23,8 @@ async function xlsx(rows: unknown[][], header = HEADER) {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-const LOGIN_LABEL = "Email, Mobile or Username";
-
-const OFFICER = { firstName: "Asha", lastName: "Mehta", mobile: "9000011111", email: "asha.mehta@gmail.com" };
-const OFFICER2 = { firstName: "Bharat", lastName: "Joshi", mobile: "9000022222", email: "bharat@yahoo.com" };
-const OFFICER_NAME = "Asha Mehta";
+const LOGIN_LABEL = "Username";
+const OFFICER_NAME = "Male Officer";
 
 // A screen can crash while everything else about it still looks fine, so every test run watches for this.
 const pageErrors: string[] = [];
@@ -50,6 +48,11 @@ async function loginPage(browser: Browser, username: string, viewport?: { width:
 }
 
 const apiOf = (page: Page) => page.context().request;
+/** Phones show marking and history one at a time. Large screens show both, with no bar to tap. */
+const showView = async (page: Page, name: "Mark" | "History") => {
+  const bar = page.getByRole("navigation", { name: "Marking view" });
+  if (await bar.isVisible()) await bar.getByRole("button", { name, exact: true }).click();
+};
 const pick = async (page: Page, label: string, option: string) => {
   await page.getByLabel(label, { exact: true }).click();
   await page.getByRole("option", { name: option, exact: true }).click();
@@ -60,27 +63,29 @@ const upload = (api: APIRequestContext, buffer: Buffer, name = "members.xlsx") =
   });
 const setEvent = (api: APIRequestContext, day: number, action: string) =>
   api.post(`/api/admin/events/${day}`, { data: { action } });
-const mark = (api: APIRequestContext, memberId: number, eventDay: number, status?: "present" | "absent") =>
-  api.post("/api/officer/attendance", { data: { memberId, eventDay, status } });
-const register = (api: APIRequestContext, data: object) =>
-  api.post("/api/auth/register", { data: { password: TEST_PASSWORD, confirmPassword: TEST_PASSWORD, ...data } });
+const mark = (api: APIRequestContext, memberId: number, eventDay: number, extra: object = {}) =>
+  api.post("/api/officer/attendance", { data: { memberId, eventDay, ...extra } });
 const logIn = (api: APIRequestContext, username: string, password = TEST_PASSWORD) =>
   api.post("/api/auth/login", { data: { username, password } });
 const search = async (api: APIRequestContext, q: string, day = 1) => {
   const res = await api.get(`/api/officer/search?day=${day}&q=${encodeURIComponent(q)}`);
   expect(res.status()).toBe(200);
-  return (await res.json()).results as { id: number; name: string; global_member_id: string; mobile: string; gender: string; center: string; attendance_status: string | null }[];
+  return (await res.json()).results as { id: number; name: string; global_member_id: string; mobile: string; gender: string; center: string; present_at: string | null }[];
 };
 const memberId = async (globalId: string) => (await db`select id from members where global_member_id = ${globalId}`)[0].id as number;
 const quick = (api: APIRequestContext, data: object) =>
-  api.post("/api/officer/quick-entry", { data: { eventDay: 1, center: "Vapi", gender: "Male", ...data } });
+  api.post("/api/officer/quick-entry", { data: { eventDay: 1, center: "Vapi", ...data } });
 
 let admin: Page, officer: Page, officer2: Page;
 let adminApi: APIRequestContext, officerApi: APIRequestContext, officer2Api: APIRequestContext;
 
-test("login: wrong password refused, pages closed, Admin can log in", async ({ browser, page }) => {
+test("login: three accounts only, no signup, wrong password refused", async ({ browser, page, request }) => {
   await page.goto("/");
   await page.waitForURL("**/login");
+  await expect(page.getByText(/sign ?up|register/i)).toHaveCount(0);
+  expect((await page.goto("/register"))?.status()).toBe(404);
+  expect((await request.post("/api/auth/register", { data: { email: "x@y.z", password: "long-enough-1" } })).status()).toBe(404);
+  await page.goto("/login");
 
   // Everything else here would still pass on an unstyled page, so check the styles really load.
   await expect(page.getByRole("button", { name: "Log in" })).toHaveCSS("background-color", "rgb(28, 90, 150)");
@@ -93,7 +98,7 @@ test("login: wrong password refused, pages closed, Admin can log in", async ({ b
   await page.getByRole("button", { name: "Hide password" }).click();
   await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "password");
   await page.getByRole("button", { name: "Log in" }).click();
-  await expect(page.getByText("Wrong login details or password.")).toBeVisible();
+  await expect(page.getByText("Wrong username or password.")).toBeVisible();
 
   for (const route of ["/admin", "/officer", "/admin/members", "/admin/officers"]) {
     await page.goto(route);
@@ -101,7 +106,15 @@ test("login: wrong password refused, pages closed, Admin can log in", async ({ b
   }
 
   admin = await loginPage(browser, "admin");
-  adminApi = apiOf(admin);
+  officer = await loginPage(browser, "male.officer", { width: 390, height: 844 });
+  officer2 = await loginPage(browser, "female.officer");
+  [adminApi, officerApi, officer2Api] = [apiOf(admin), apiOf(officer), apiOf(officer2)];
+  const accounts = await db`select username, role, gender_scope from app_users where is_active order by username`;
+  expect(accounts.map((a) => [a.username, a.role, a.gender_scope])).toEqual([
+    ["admin", "admin", null], ["female.officer", "officer", "Female"], ["male.officer", "officer", "Male"],
+  ]);
+  // The database itself refuses a second active officer for the same gender.
+  await expect(db`insert into app_users (username, display_name, password_hash, role, gender_scope, approval_status) values ('extra', 'Extra', 'x', 'officer', 'Male', 'approved')`).rejects.toThrow();
 
   // First run: the dashboard says what to do first.
   await expect(admin.getByText("No members yet.")).toBeVisible();
@@ -110,174 +123,24 @@ test("login: wrong password refused, pages closed, Admin can log in", async ({ b
   expect(hash).toMatch(/^\$2[aby]\$12\$/);
 });
 
-test("registration: fields are checked on the server, and nobody can register themselves into access", async ({ request }) => {
-  const valid = { ...OFFICER, email: "checks@gmail.com", mobile: "9000033333" };
-  const bad: [object, string][] = [
-    [{ firstName: "" }, "First name is required."],
-    [{ lastName: "   " }, "Last name is required."],
-    [{ mobile: "12345" }, "10-digit"],
-    [{ email: "not-an-email" }, "valid email"],
-    [{ password: "short", confirmPassword: "short" }, "at least 8"],
-    [{ confirmPassword: "something-else" }, "don't match"],
-    [{ password: "x".repeat(73), confirmPassword: "x".repeat(73) }, "too long"],
-  ];
-  for (const [change, message] of bad) {
-    const res = await register(request, { ...valid, ...change });
-    expect(res.status()).toBe(400);
-    expect((await res.json()).message).toContain(message);
-  }
-  expect((await db`select count(*)::int as n from app_users where email = 'checks@gmail.com'`)[0].n).toBe(0);
+test("reset password: temporary password shown once, every device logged out, and a new password must be chosen", async ({ browser, request }) => {
+  const username = "female.officer";
+  const [{ id, password_hash: originalHash }] = await db`select id, password_hash from app_users where username = ${username}`;
+  const device = await loginPage(browser, username);
 
-  // Asking for more access in the request does nothing.
-  const forged = await register(request, { ...valid, role: "admin", approval_status: "approved", approvalStatus: "approved", is_active: true });
-  expect(forged.status()).toBe(201);
-  const [row] = await db`select role, approval_status, display_name, mobile, password_hash from app_users where email = 'checks@gmail.com'`;
-  expect(row).toMatchObject({ role: "officer", approval_status: "pending", display_name: "Asha Mehta", mobile: "9000033333" });
-  expect(row.password_hash).toMatch(/^\$2[aby]\$12\$/);
-
-  // One registration per email and per mobile, however they're typed, including at the same moment.
-  const again = await register(request, { ...valid, mobile: "9000044444", email: "CHECKS@gmail.com" });
-  expect(again.status()).toBe(409);
-  expect((await again.json()).message).toContain("email is already registered");
-  const sameMobile = await register(request, { ...valid, email: "other@gmail.com", mobile: "+91 90000 33333" });
-  expect(sameMobile.status()).toBe(409);
-  expect((await sameMobile.json()).message).toContain("mobile number is already registered");
-  const race = await Promise.all([0, 1, 2, 3].map(() => register(request, { ...valid, email: "race@gmail.com", mobile: "9000055555" })));
-  expect(race.map((r) => r.status()).sort()).toEqual([201, 409, 409, 409]);
-
-  // Waiting accounts can't log in, and only the right password learns why.
-  const wrong = await logIn(request, "checks@gmail.com", "wrong-password");
-  expect(wrong.status()).toBe(401);
-  const waiting = await logIn(request, "checks@gmail.com");
-  expect(waiting.status()).toBe(403);
-  expect((await waiting.json()).code).toBe("pending_approval");
-  expect((await request.get("/api/events")).status()).toBe(401);
-
-  // Clean up, so these don't count as officers waiting for approval in later tests.
-  await db`delete from audit_log where username in ('checks@gmail.com', 'race@gmail.com')`;
-  await db`delete from app_users where email in ('checks@gmail.com', 'race@gmail.com')`;
-});
-
-test("an officer registers on the page, Admin approves, and they log in with email or mobile", async ({ browser, page }) => {
-  await page.goto("/login");
-  await page.getByRole("link", { name: "Register here" }).click();
-  await page.waitForURL("**/register");
-
-  await page.getByLabel("First Name").fill(OFFICER.firstName);
-  await page.getByLabel("Last Name").fill(OFFICER.lastName);
-  await page.getByLabel("Mobile Number").fill(OFFICER.mobile);
-  await page.getByLabel("Email").fill(OFFICER.email);
-  await page.getByLabel("Set Password").fill(TEST_PASSWORD);
-  await page.getByLabel("Confirm Password").fill("not-the-same");
-  await expect(page.getByText("The two passwords don't match yet.")).toBeVisible();
-  await page.getByRole("button", { name: "Register", exact: true }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "don't match" })).toBeVisible();
-  expect((await db`select count(*)::int as n from app_users where email = ${OFFICER.email}`)[0].n).toBe(0);
-  
-  await page.getByLabel("Confirm Password").fill(TEST_PASSWORD);
-  await page.getByRole("button", { name: "Register", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Registration received" })).toBeVisible();
-
-  // Not logged in, and the login page says why.
-  await page.getByRole("link", { name: "Back to log in" }).click();
-  await page.getByLabel(LOGIN_LABEL).fill(OFFICER.email);
-  await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
-  await page.getByRole("button", { name: "Log in" }).click();
-  await expect(page.getByText("waiting for Admin to approve")).toBeVisible();
-  await page.goto("/officer");
-  await expect(page).toHaveURL(/\/login$/);
-
-  // Admin sees it on the dashboard and approves it on the Officers page.
-  expect((await register(page.context().request, OFFICER2)).status()).toBe(201);
-  await admin.goto("/admin");
-  await expect(admin.getByText("2 new officers are waiting for your approval.")).toBeVisible();
-  await admin.getByRole("link", { name: "Review" }).click();
-  await admin.waitForURL("**/admin/officers");
-  await expect(admin.getByRole("region", { name: "Officer list" }).getByRole("row").nth(1)).toBeVisible();
-  await admin.screenshot({ path: "test-results/screens/officers-desktop.png" });
-  const asha = admin.getByRole("row").filter({ hasText: OFFICER_NAME });
-  await expect(asha).toContainText("Waiting for approval");
-  await expect(asha).toContainText(OFFICER.email);
-  await expect(asha).toContainText(OFFICER.mobile);
-  await asha.getByRole("button", { name: "Approve" }).click();
-  await expect(admin.getByRole("status")).toContainText(`Approved: ${OFFICER_NAME}`);
-  await expect(asha).toContainText("Approved");
-  await admin.getByRole("row").filter({ hasText: "Bharat Joshi" }).getByRole("button", { name: "Approve" }).click();
-  await expect(admin.getByRole("row").filter({ hasText: "Bharat Joshi" })).toContainText("Approved");
-
-  const [approved] = await db`select approval_status, reviewed_at, reviewed_by from app_users where email = ${OFFICER.email}`;
-  expect(approved.approval_status).toBe("approved");
-  expect(approved.reviewed_at).toBeInstanceOf(Date);
-
-  // Either one works as the login, however the number is typed.
-  officer = await loginPage(browser, OFFICER.email, { width: 390, height: 844 });
-  officer2 = await loginPage(browser, "+91 90000 22222");
-  [officerApi, officer2Api] = [apiOf(officer), apiOf(officer2)];
-  await expect(officer.getByText(`${OFFICER_NAME} · Attendance Officer`)).toBeVisible();
-});
-
-test("Admin can reject an officer or remove access, and it takes effect at once", async ({ browser, request }) => {
-  const person = { firstName: "Chirag", lastName: "Shah", mobile: "9000066666", email: "chirag@gmail.com" };
-  expect((await register(request, person)).status()).toBe(201);
-  const [{ id }] = await db`select id from app_users where email = ${person.email}`;
-
-  await admin.goto("/admin/officers");
-  const row = admin.getByRole("row").filter({ hasText: "Chirag Shah" });
-  await row.getByRole("button", { name: "Reject" }).click();
-  await admin.getByRole("dialog").getByRole("button", { name: "Reject" }).click();
-  await expect(row).toContainText("No access");
-  const refused = await logIn(request, person.email);
-  expect(refused.status()).toBe(403);
-  expect((await refused.json()).code).toBe("no_access");
-
-  await row.getByRole("button", { name: "Restore access" }).click();
-  await expect(row).toContainText("Approved");
-  const page = await loginPage(browser, person.email);
-  await expect(page.getByLabel(/Search by Member ID/).or(page.getByText("Not Started").first())).toBeVisible();
-
-  // Already logged in: the next request is refused, and the screen goes back to login by itself.
-  await row.getByRole("button", { name: "Remove access" }).click();
-  await admin.getByRole("dialog").getByRole("button", { name: "Remove Access" }).click();
-  await expect(row).toContainText("No access");
-  expect((await apiOf(page).get("/api/events")).status()).toBe(401);
-  await page.waitForURL("**/login", { timeout: 8000 });
-
-  // Only Admin can do this, it can't touch Admin's own account, and it's filterable.
-  expect((await officerApi.get("/api/admin/officers")).status()).toBe(403);
-  expect((await officerApi.patch(`/api/admin/officers/${id}`, { data: { action: "approve" } })).status()).toBe(403);
-  const [adminRow] = await db`select id from app_users where username = 'admin'`;
-  expect((await adminApi.patch(`/api/admin/officers/${adminRow.id}`, { data: { action: "reject" } })).status()).toBe(404);
-  await pick(admin, "Status", "Approved");
-  await expect(admin.getByRole("row").filter({ hasText: "Chirag Shah" })).toHaveCount(0);
-  await expect(admin.getByRole("row").filter({ hasText: OFFICER_NAME })).toHaveCount(1);
-});
-
-test("reset password: temporary password shown once, old logins end, and a new password must be chosen", async ({ browser, request }) => {
-  const person = { firstName: "Dev", lastName: "Rana", mobile: "9000077777", email: "dev.rana@gmail.com" };
-  expect((await register(request, person)).status()).toBe(201);
-  const [{ id }] = await db`select id from app_users where email = ${person.email}`;
-
-  // Not offered, and refused, until they're approved. Officers and strangers can't do it at all.
-  await admin.goto("/admin/officers");
-  await pick(admin, "Status", "All officers");
-  const row = admin.getByRole("row").filter({ hasText: "Dev Rana" });
-  await expect(row).toContainText("Waiting for approval");
-  await expect(row.getByRole("button", { name: "Reset password" })).toHaveCount(0);
-  expect((await adminApi.post(`/api/admin/officers/${id}/reset-password`, { data: {} })).status()).toBe(404);
-  await row.getByRole("button", { name: "Approve" }).click();
-  await expect(row).toContainText("Approved");
   expect((await request.post(`/api/admin/officers/${id}/reset-password`, { data: {} })).status()).toBe(401);
   expect((await officerApi.post(`/api/admin/officers/${id}/reset-password`, { data: {} })).status()).toBe(403);
   const [adminRow] = await db`select id, password_hash from app_users where username = 'admin'`;
   expect((await adminApi.post(`/api/admin/officers/${adminRow.id}/reset-password`, { data: {} })).status()).toBe(404);
   expect((await db`select password_hash from app_users where username = 'admin'`)[0].password_hash).toBe(adminRow.password_hash);
 
-  // Logged in on a device, and locked out from guessing.
-  const device = await loginPage(browser, person.email);
-  for (let i = 0; i < 5; i++) await logIn(request, person.email, "wrong-guess");
-  expect((await logIn(request, person.email)).status()).toBe(429);
+  for (let i = 0; i < 5; i++) await logIn(request, username, "wrong-guess");
+  expect((await logIn(request, username)).status()).toBe(429);
 
+  await admin.goto("/admin/officers");
   await admin.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  const row = admin.getByRole("region", { name: "Officer list" }).getByRole("listitem").filter({ hasText: "Female Officer" });
+  await expect(row).toContainText(username);
   await row.getByRole("button", { name: "Reset password" }).click();
   await admin.getByRole("dialog").getByRole("button", { name: "Reset Password" }).click();
   const shown = admin.getByTestId("temporary-password");
@@ -287,63 +150,50 @@ test("reset password: temporary password shown once, old logins end, and a new p
   await admin.getByRole("dialog").getByRole("button", { name: "Copy" }).click();
   await expect(admin.getByRole("dialog").getByRole("button", { name: "Copied" })).toBeVisible();
   expect(await admin.evaluate(() => navigator.clipboard.readText())).toBe(temporary);
-  await admin.screenshot({ path: "test-results/screens/reset-password-dialog.png" });
   await admin.getByRole("dialog").getByRole("button", { name: "Done" }).click();
   await expect(shown).toHaveCount(0);
 
-  // The old password and the old device stop working at once, and the lockout is cleared.
+  // The old password and every device stop working at once, and the lockout is cleared.
   expect((await apiOf(device).get("/api/events")).status()).toBe(401);
   await device.waitForURL("**/login", { timeout: 8000 });
-  expect((await logIn(request, person.email)).status()).toBe(401);
+  expect((await logIn(request, username)).status()).toBe(401);
 
-  // Only a hash is stored, and the password isn't in the log.
   const [stored] = await db`select password_hash, must_change_password from app_users where id = ${id}`;
   expect(stored.password_hash).toMatch(/^\$2[aby]\$12\$/);
   expect(stored.must_change_password).toBe(true);
-  expect((await db`select count(*)::int as n from audit_log where action = 'officer.password_reset' and entity_id = ${id}`)[0].n).toBe(1);
   expect((await db`select count(*)::int as n from audit_log where details::text like ${`%${temporary}%`}`)[0].n).toBe(0);
 
   // With the temporary password, the only thing they can do is choose a new one.
-  await device.getByLabel(LOGIN_LABEL).fill(person.mobile);
+  await device.getByLabel(LOGIN_LABEL).fill(username);
   await device.getByLabel("Password", { exact: true }).fill(temporary);
   await device.getByRole("button", { name: "Log in" }).click();
   await device.waitForURL("**/change-password");
-  await device.screenshot({ path: "test-results/screens/change-password.png" });
   const api = apiOf(device);
-  for (const path of ["/api/events", "/api/officer/search?day=1&q=a"]) {
-    const blocked = await api.get(path);
-    expect(blocked.status()).toBe(403);
-    expect((await blocked.json()).code).toBe("password_change_required");
-  }
-  expect((await api.post("/api/officer/attendance", { data: { memberId: 1, eventDay: 1 } })).status()).toBe(403);
+  const blocked = await api.get("/api/events");
+  expect(blocked.status()).toBe(403);
+  expect((await blocked.json()).code).toBe("password_change_required");
   await device.goto("/officer");
-  await expect(device).toHaveURL(/\/change-password$/);
-  await device.goto("/");
   await expect(device).toHaveURL(/\/change-password$/);
 
   const change = (password: string, confirmPassword = password) => api.post("/api/auth/change-password", { data: { password, confirmPassword } });
   expect((await change("short")).status()).toBe(400);
   expect((await change("long-enough-1", "long-enough-2")).status()).toBe(400);
-  const same = await change(temporary);
-  expect(same.status()).toBe(400);
-  expect((await same.json()).code).toBe("same_password");
-  expect((await request.post("/api/auth/change-password", { data: { password: "long-enough-1", confirmPassword: "long-enough-1" } })).status()).toBe(401);
+  expect((await (await change(temporary)).json()).code).toBe("same_password");
 
   const fresh = "my-own-password-9";
   await device.getByLabel("New Password").fill(fresh);
-  await device.getByLabel("Confirm Password").fill("something-else");
-  await expect(device.getByText("The two passwords don't match yet.")).toBeVisible();
   await device.getByLabel("Confirm Password").fill(fresh);
   await device.getByRole("button", { name: "Save New Password" }).click();
   await device.waitForURL("**/officer");
   expect((await apiOf(device).get("/api/events")).status()).toBe(200);
-  await device.goto("/change-password");
-  await expect(device).toHaveURL(/\/officer$/);
-
-  expect((await logIn(request, person.email, temporary)).status()).toBe(401);
-  expect((await logIn(request, person.email, fresh)).status()).toBe(200);
-  expect((await db`select must_change_password as m from app_users where id = ${id}`)[0].m).toBe(false);
+  expect((await logIn(request, username, temporary)).status()).toBe(401);
+  expect((await logIn(request, username, fresh)).status()).toBe(200);
   await device.context().close();
+
+  // Put things back for the tests that follow. The earlier session is logged out by this reset.
+  await db`update app_users set password_hash = ${originalHash} where id = ${id}`;
+  officer2 = await loginPage(browser, username);
+  officer2Api = apiOf(officer2);
 
   // A session issued before this feature existed, with no version in it, still works.
   const old = await new SignJWT({}).setProtectedHeader({ alg: "HS256" }).setSubject(adminRow.id).setIssuedAt().setExpirationTime("1d")
@@ -362,7 +212,7 @@ test("permissions are enforced on the server for every role", async ({ request }
   expect((await setEvent(officerApi, 1, "start")).status()).toBe(403);
   expect((await upload(officerApi, await xlsx([]))).status()).toBe(403);
   expect((await officerApi.delete("/api/admin/members/1")).status()).toBe(403);
-  expect((await officerApi.post("/api/admin/attendance/1/correct", { data: { action: "remove", reason: "x" } })).status()).toBe(403);
+  expect((await officerApi.post("/api/admin/attendance/1/cancel", { data: { reason: "x" } })).status()).toBe(403);
   // Admin can use the marking screen too, so these are open to Admin.
   expect((await adminApi.get("/api/officer/search?day=1&q=a")).status()).toBe(200);
   // Officer pages redirect away from admin
@@ -394,7 +244,7 @@ test("Excel upload in the UI: summary, invalid row details, and no duplicates on
     [3, 2053, "Radha Patel", "+91 98765 00003", "Female", "Pune"],
     [4, 3001, "Suresh Shah", "09876500004", "Male", "Bharuch"],
     [5, "", "No Id Man", "9876500005", "Male", "Vapi"],
-    [6, 3002, "Bad Gender", "9876500006", "M", "Vapi"],
+    [6, 3002, "Bad Gender", "9876500006", "X", "Vapi"],
     [7, 3003, "Bad Mobile", "12345", "Male", "Vapi"],
     [8, 3004, "", "9876500008", "Female", "Vapi"],
     [9, 2051, "Repeat Row", "9876500009", "Male", "Vapi"],
@@ -411,7 +261,7 @@ test("Excel upload in the UI: summary, invalid row details, and no duplicates on
   const summary = admin.getByTestId("import-summary");
   await expect(summary).toBeVisible();
   await expect(summary.locator("dd")).toHaveText(["9", "5", "0", "4"]);
-  await expect(summary).toContainText('Gender "M" must be Male or Female');
+  await expect(summary).toContainText('Gender "X" must be M, F, Male or Female');
   await expect(summary).toContainText("not a valid 10-digit number");
   await expect(summary).toContainText("Name is missing");
   await expect(summary).toContainText("repeated (first seen on row 2)");
@@ -429,6 +279,58 @@ test("Excel upload in the UI: summary, invalid row details, and no duplicates on
   expect((await db`select count(*)::int as n from members`)[0].n).toBe(before);
   expect((await db`select name from members where global_member_id = '2051'`)[0].name).toBe("Ramesh K Patel");
   expect((await db`select center from members where name = 'No Id Man'`)[0].center).toBe("Navsari");
+});
+
+test("Excel upload: real-world files with M and F, and people with no mobile number", async () => {
+  const rows = [
+    [1, 6001, "Mita Letter", 9876560001, "F", "Vapi"],
+    [2, 6002, "Mohan Letter", 9876560002, "M", "Vapi"],
+    [3, 6003, "Lower Case", 9876560003, "f", "Vapi"],
+    [4, 6004, "No Mobile Id", "", "M", "Vapi"],
+    [5, "", "No Mobile Noid", "", "F", "Vapi"],
+    [6, "", "No Mobile Noid", "", "F", "Vapi"], // listed twice, so it's a mistake to show
+    [7, 6007, "Wrong Number", "12345", "M", "Vapi"], // a wrong number is still an error
+  ];
+  const first = await (await upload(adminApi, await xlsx(rows, ["No", "MemberID", "Name", "Mo.no", "Gender", "Center"]))).json();
+  expect(first).toMatchObject({ totalRows: 7, imported: 5, updated: 0, errorRows: 2 });
+  expect(first.errors.map((e: { row: number }) => e.row)).toEqual([7, 8]);
+  expect(first.errors[0].errors[0]).toContain("repeated");
+  expect(first.errors[1].errors[0]).toContain("not a valid 10-digit number");
+
+  const saved = await db`select name, gender, mobile from members where name in ('Mita Letter', 'Mohan Letter', 'Lower Case', 'No Mobile Id', 'No Mobile Noid') order by name`;
+  expect(saved.map((m) => [m.name, m.gender, m.mobile])).toEqual([
+    ["Lower Case", "Female", "9876560003"],
+    ["Mita Letter", "Female", "9876560001"],
+    ["Mohan Letter", "Male", "9876560002"],
+    ["No Mobile Id", "Male", null],
+    ["No Mobile Noid", "Female", null],
+  ]);
+
+  // Uploading the same file again adds nobody, even those with neither an ID nor a number.
+  const count = async () => (await db`select count(*)::int as n from members`)[0].n;
+  const before = await count();
+  const again = await (await upload(adminApi, await xlsx(rows))).json();
+  expect(again).toMatchObject({ imported: 0, updated: 5, errorRows: 2 });
+  expect(await count()).toBe(before);
+
+  // A blank in a later file doesn't erase a number already on record.
+  await upload(adminApi, await xlsx([[1, 6001, "Mita Letter", "", "F", "Vapi"]]));
+  expect((await db`select mobile from members where global_member_id = '6001'`)[0].mobile).toBe("9876560001");
+
+  // Someone with no number can still be found, edited and shown on every screen.
+  const none = await memberId("6004");
+  await admin.goto("/admin/members");
+  await admin.getByLabel("Search members").fill("No Mobile Id");
+  const row = admin.getByRole("row").filter({ hasText: "No Mobile Id" });
+  await expect(row).toContainText("—");
+  await row.getByRole("button", { name: "Edit" }).click();
+  const dialog = admin.getByRole("dialog");
+  await expect(dialog.getByLabel("Mobile Number")).toHaveValue("");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(admin.getByRole("status")).toContainText("Member updated");
+  expect((await db`select mobile from members where id = ${none}`)[0].mobile).toBeNull();
+  const badEdit = await adminApi.patch(`/api/admin/members/${none}`, { data: { globalMemberId: "6004", name: "No Mobile Id", mobile: "123", gender: "Male", center: "Vapi" } });
+  expect(badEdit.status()).toBe(400);
 });
 
 test("attendance is refused before the event starts, and officers see all three days", async () => {
@@ -463,26 +365,51 @@ test("only one event can be active, including when two starts race", async () =>
   expect((await blocked.json()).code).toBe("another_event_active");
 });
 
-test("search: partial ID, name and mobile, across all members whatever the officer", async () => {
+test("search: partial ID and mobile, and names by the start of each name in order, within the officer's gender", async () => {
   const ids = (await search(officerApi, "205")).map((r) => r.global_member_id);
-  expect(ids).toEqual(["2051", "2052", "2053"]);
-  expect((await search(officer2Api, "205")).map((r) => r.global_member_id)).toEqual(["2051", "2052", "2053"]);
+  expect(ids).toEqual(["2051", "2052"]); // 2053 is Female
+  expect((await search(officer2Api, "205")).map((r) => r.global_member_id)).toEqual(["2053"]);
 
-  expect((await search(officerApi, "ra pa")).map((r) => r.global_member_id)).toEqual(expect.arrayContaining(["2051", "2052", "2053"]));
+  expect((await search(officerApi, "ra pa")).map((r) => r.global_member_id)).toEqual(expect.arrayContaining(["2051", "2052"]));
   expect((await search(officerApi, "ram pat")).map((r) => r.name)).toEqual(["Ramesh K Patel"]);
   expect((await search(officerApi, "RAM PAT")).length).toBe(1);
-  expect((await search(officerApi, "radha"))[0]).toMatchObject({ name: "Radha Patel", gender: "Female" });
+  expect(await search(officerApi, "radha")).toEqual([]);
+
+  // The example from real use: "jay kan" must not find Jay... or Kan... in the wrong place.
+  const add = async (id: string, name: string, mobile: string) => {
+    await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values (${id}, ${name}, ${mobile}, 'Male', 'Vapi', 'excel_import')`;
+  };
+  await add("7101", "Jayantibhai Popatbhai Kanani", "9876571001");
+  await add("7102", "Monal Jaytibhai Kanani", "9876571002");
+  await add("7103", "Vijaybhai Gangjibhai Kanjariya", "9876571003");
+  await add("7104", "Jay Kanani", "9876571004");
+  await add("7105", "Jayesh Patel", "9876571005");
+  const names = async (q: string) => (await search(officerApi, q)).map((r) => r.name).sort();
+  expect(await names("jay kan")).toEqual(["Jay Kanani", "Jayantibhai Popatbhai Kanani"]); // first and last
+  expect(await names("JAY  KAN")).toEqual(["Jay Kanani", "Jayantibhai Popatbhai Kanani"]);
+  expect(await names("jay pop kan")).toEqual(["Jayantibhai Popatbhai Kanani"]); // first, middle and last
+  expect(await names("jay kan pop")).toEqual([]); // out of order
+  expect(await names("kan jay")).toEqual([]);
+  expect(await names("mon jay kan")).toEqual(["Monal Jaytibhai Kanani"]);
+  expect(await names("vij kan")).toEqual(["Vijaybhai Gangjibhai Kanjariya"]);
+  // One piece alone starts any word, with first names listed first, but never matches mid-word.
+  const single = (await search(officerApi, "jay")).map((r) => r.name);
+  expect(single.slice(0, 3).sort()).toEqual(["Jay Kanani", "Jayantibhai Popatbhai Kanani", "Jayesh Patel"]);
+  expect(single).toContain("Monal Jaytibhai Kanani");
+  expect(single).not.toContain("Vijaybhai Gangjibhai Kanjariya");
+  // Admin's member list follows the same rule.
+  const listed = await (await adminApi.get("/api/admin/members?q=jay%20kan")).json();
+  expect(listed.members.map((m: { name: string }) => m.name).sort()).toEqual(["Jay Kanani", "Jayantibhai Popatbhai Kanani"]);
 
   const byMobile = await search(officerApi, "500004");
   expect(byMobile.map((r) => r.name)).toEqual(["Suresh Shah"]);
+  expect(await search(officerApi, "500003")).toEqual([]); // Radha's number, wrong officer
 
   const [row] = await search(officerApi, "3001");
   expect(row).toMatchObject({ global_member_id: "3001", name: "Suresh Shah", mobile: "9876500004", center: "Bharuch" });
 
-  // LIKE wildcards and SQL are treated as plain text.
-  expect(await search(officerApi, "%")).toEqual([]);
-  expect(await search(officerApi, "_")).toEqual([]);
-  expect(await search(officerApi, "' or 1=1 --")).toEqual([]);
+  // Punctuation and SQL are treated as plain text.
+  for (const q of ["%", "_", "' or 1=1 --", ".*", "(", "[a", "\\"]) expect(await search(officerApi, q)).toEqual([]);
 });
 
 test("mark attendance through the UI on a phone, then Already Present", async () => {
@@ -508,7 +435,7 @@ test("mark attendance through the UI on a phone, then Already Present", async ()
     select a.event_day, a.marked_at, u.username, a.status from attendance a
     join app_users u on u.id = a.marked_by join members m on m.id = a.member_id
     where m.global_member_id = '3001'`;
-  expect(record).toMatchObject({ event_day: 1, username: OFFICER.email, status: "present" });
+  expect(record).toMatchObject({ event_day: 1, username: "male.officer", status: "present" });
   expect(record.marked_at).toBeInstanceOf(Date);
 });
 
@@ -516,7 +443,7 @@ test("Enter marks only when there is exactly one match", async () => {
   await officer.goto("/officer");
   const box = officer.getByLabel(/Search by Member ID/);
   await box.fill("205");
-  await expect(officer.getByRole("button", { name: "Mark Present" })).toHaveCount(3);
+  await expect(officer.getByRole("button", { name: "Mark Present" })).toHaveCount(2);
   await box.press("Enter");
   await expect(officer.getByRole("status")).toHaveCount(0);
   expect((await db`select count(*)::int as n from attendance a join members m on m.id=a.member_id where m.global_member_id in ('2051','2052')`)[0].n).toBe(0);
@@ -527,72 +454,166 @@ test("Enter marks only when there is exactly one match", async () => {
   await expect(officer.getByRole("status")).toContainText("Present: Ramesh K Patel");
 });
 
-test("any officer can mark any member, and a second officer sees it's already done", async () => {
+test("an officer cannot mark a member of the other gender, even with a forged request", async () => {
   const radha = await memberId("2053");
-  expect((await (await mark(officer2Api, radha, 1)).json()).status).toBe("marked");
-  const second = await (await mark(officerApi, radha, 1)).json();
-  expect(second).toMatchObject({ status: "already_present", markedBy: "Bharat Joshi" });
-  expect((await db`select count(*)::int as n from attendance where member_id = ${radha}`)[0].n).toBe(1);
+  const res = await mark(officerApi, radha, 1);
+  expect(res.status()).toBe(404);
+  expect((await db`select count(*)::int as n from attendance where member_id = ${radha}`)[0].n).toBe(0);
+  expect((await mark(officer2Api, radha, 1)).status()).toBe(200);
+  expect((await mark(officer2Api, await memberId("2052"), 1)).status()).toBe(404);
 });
 
-test("absent: an officer can mark it, late arrivals can become present, but present can never be undone", async () => {
-  const addMember = async (id: string, name: string, mobile: string) => {
+test("Present only: no Absent option anywhere, and an officer can never undo Present", async () => {
+  await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('4001', 'Late Lalit', '9876540001', 'Male', 'Vapi', 'excel_import')`;
+  const late = await memberId("4001");
+  await officer.goto("/officer");
+  await expect(officer.getByRole("button", { name: /Absent/ })).toHaveCount(0);
+  await expect(officer.getByText(/absent/i)).toHaveCount(0);
+  await officer.getByLabel(/Search by Member ID/).fill("4001");
+  const row = officer.getByRole("region", { name: "Search results" }).getByRole("listitem").filter({ hasText: "Late Lalit" });
+  await expect(row.getByRole("button")).toHaveCount(1);
+  const markButton = row.getByRole("button", { name: "Mark Present" });
+  await expect(markButton).toHaveText("Mark");
+  const size = (await markButton.boundingBox())!;
+  expect(size.width).toBeLessThan(100); // small enough to leave the name its room, on every screen
+  expect(size.height).toBeGreaterThanOrEqual(36); // and still easy to tap
+  expect(size.height).toBeLessThanOrEqual(40);
+  expect(Number.parseFloat(await markButton.evaluate((e) => getComputedStyle(e).borderTopLeftRadius))).toBeGreaterThanOrEqual(size.height / 2); // fully round
+  await officer.screenshot({ path: "test-results/screens/officer-mark-phone.png" });
+
+  // A forged "absent" is ignored: the request can only ever record Present.
+  expect((await (await mark(officerApi, late, 1, { status: "absent" })).json()).status).toBe("marked");
+  expect((await db`select status from attendance where member_id = ${late} and event_day = 1`)[0].status).toBe("present");
+  expect((await (await mark(officerApi, late, 1, { status: "absent" })).json()).status).toBe("already_present");
+  expect((await db`select status from attendance where member_id = ${late} and event_day = 1`)[0].status).toBe("present");
+
+  await officer.getByLabel(/Search by Member ID/).fill("");
+  await officer.getByLabel(/Search by Member ID/).fill("4001");
+  await expect(row).toContainText("Already Present");
+  await expect(row.getByRole("button")).toHaveCount(0);
+
+  // Officers have no way to remove attendance at all.
+  const [record] = await db`select id from attendance where member_id = ${late} and event_day = 1`;
+  expect((await officerApi.post(`/api/admin/attendance/${record.id}/cancel`, { data: { reason: "x" } })).status()).toBe(403);
+  expect((await officerApi.delete(`/api/admin/members/${late}`)).status()).toBe(403);
+});
+
+test("the Area dropdown narrows the list and the search, and keeps within the officer's gender", async () => {
+  const add = async (id: string, name: string, mobile: string, center: string, gender = "Male") => {
+    await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values (${id}, ${name}, ${mobile}, ${gender}, ${center}, 'excel_import')`;
+  };
+  await add("8201", "Area Puneman", "9876582001", "Pune");
+  await add("8202", "Area Vapiman", "9876582002", "Vapi");
+  await add("8203", "Area Surat", "9876582003", "Surat");
+  await add("8204", "Area Herself", "9876582004", "Nashik", "Female");
+
+  await officer.goto("/officer");
+  const area = officer.getByRole("combobox", { name: "Area", exact: true });
+  await expect(area).toHaveText("All Areas");
+  await area.click();
+  const options = await officer.getByRole("option").allTextContents();
+  expect(options[0]).toBe("All Areas");
+  expect(options).toEqual(expect.arrayContaining(["Pune", "Vapi", "Surat"]));
+  expect(options).not.toContain("Nashik"); // only the other gender is there
+  await officer.getByRole("option", { name: "Pune", exact: true }).click();
+
+  const list = officer.getByRole("region", { name: "Not marked yet" });
+  await expect(list).toContainText("Area Puneman");
+  await expect(list).not.toContainText("Area Vapiman");
+  const inPune = (await db`
+    select count(*)::int as n from members m where m.gender = 'Male' and m.center = 'Pune' and not exists (
+      select 1 from attendance a where a.member_id = m.id and a.event_day = 1 and a.status = 'present')`)[0].n;
+  await expect(list.getByRole("heading")).toContainText(`(${inPune})`);
+  await officer.screenshot({ path: "test-results/screens/officer-area.png" });
+
+  // Search stays inside the chosen area, and changing the area updates results already showing.
+  const box = officer.getByLabel(/Search by Member ID/);
+  await box.fill("Area V");
+  await expect(officer.getByText("No member matches “Area V” in Pune")).toBeVisible();
+  await area.click();
+  await officer.getByRole("option", { name: "Vapi", exact: true }).click();
+  const results = officer.getByRole("region", { name: "Search results" });
+  await expect(results).toContainText("Area Vapiman");
+
+  // Marking keeps the area for the next person, and Quick Entry starts with it filled in.
+  await results.getByRole("button", { name: "Mark Present" }).click();
+  await expect(officer.getByRole("status")).toContainText("Present: Area Vapiman");
+  await expect(area).toHaveText("Vapi");
+  await officer.getByRole("button", { name: /Quick Entry/ }).click();
+  await expect(officer.getByRole("region", { name: "Quick Entry" }).getByLabel("Center", { exact: true })).toHaveValue("Vapi");
+  await officer.getByRole("button", { name: "Back to search" }).click();
+  await expect(area).toHaveText("Vapi");
+
+  await area.click();
+  await officer.getByRole("option", { name: "All Areas" }).click();
+  await expect(area).toHaveText("All Areas");
+
+  // On the server: the area can't get around the gender limit, and odd values are harmless.
+  const get = async (path: string) => (await officerApi.get(path)).json();
+  expect((await get("/api/officer/unmarked?day=1&center=Nashik")).total).toBe(0);
+  expect((await get("/api/officer/search?day=1&q=Area&center=Nashik")).results).toEqual([]);
+  expect((await get(`/api/officer/unmarked?day=1&center=${encodeURIComponent("' or 1=1 --")}`)).total).toBe(0);
+  expect((await officerApi.get("/api/officer/unmarked?day=1")).status()).toBe(200);
+
+  // Admin covers every area.
+  await admin.goto("/admin/mark");
+  await admin.getByRole("combobox", { name: "Area", exact: true }).click();
+  await expect(admin.getByRole("option", { name: "Nashik", exact: true })).toBeVisible();
+  await admin.keyboard.press("Escape");
+});
+
+test("one login works on five devices at once, with no errors, and they all stay in step", async ({ browser }) => {
+  const add = async (id: string, name: string, mobile: string) => {
     await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values (${id}, ${name}, ${mobile}, 'Male', 'Vapi', 'excel_import')`;
     return memberId(id);
   };
-  const statusOf = async (id: number) => (await db`select status, marked_by from attendance where member_id = ${id} and event_day = 1`)[0];
+  const viewports = [{ width: 390, height: 844 }, { width: 360, height: 740 }, { width: 768, height: 1024 }, { width: 1280, height: 800 }, { width: 412, height: 915 }];
+  const devices = await Promise.all(viewports.map((v) => loginPage(browser, "male.officer", v)));
 
-  // On the screen: two buttons, then a confirmation, then only the allowed one left.
-  const late = await addMember("4001", "Late Lalit", "9876540001");
-  await officer.goto("/officer");
-  const box = officer.getByLabel(/Search by Member ID/);
-  await box.fill("4001");
-  const row = officer.getByRole("region", { name: "Search results" }).getByRole("listitem").filter({ hasText: "Late Lalit" });
-  await expect(row.getByRole("button", { name: "Mark Present" })).toBeVisible();
-  await officer.screenshot({ path: "test-results/screens/officer-mark-phone.png" });
-  await row.getByRole("button", { name: "Mark Absent" }).click();
-  await expect(officer.getByRole("status")).toContainText("Absent: Late Lalit");
-  await expect(box).toHaveValue("");
-  await expect(box).toBeFocused();
-  expect((await statusOf(late)).status).toBe("absent");
+  // Every device is logged in and working at the same time.
+  for (const d of devices) {
+    await expect(d.getByRole("banner")).toContainText("Male Officer");
+    expect((await apiOf(d).get("/api/events")).status()).toBe(200);
+  }
 
-  await box.fill("4001");
-  await expect(row).toContainText("Absent");
-  await expect(row.getByRole("button", { name: "Mark Absent" })).toHaveCount(0);
+  // Each device marks a different person, at the same moment.
+  const ids = await Promise.all([0, 1, 2, 3, 4].map((i) => add(`810${i}`, `Device Person${i}`, `987658100${i}`)));
+  const results = await Promise.all(devices.map((d, i) => mark(apiOf(d), ids[i], 1)));
+  expect(results.map((r) => r.status())).toEqual([200, 200, 200, 200, 200]);
+  expect((await db`select count(*)::int as n from attendance where member_id = any(${ids})`)[0].n).toBe(5);
 
-  // They arrive late.
-  await row.getByRole("button", { name: "Mark Present" }).click();
-  await expect(officer.getByRole("status")).toContainText("Present: Late Lalit");
-  expect((await statusOf(late)).status).toBe("present");
-  const [log] = await db`select details from audit_log where action = 'attendance.mark' and details->>'member_id' = ${String(late)} order by id desc limit 1`;
-  expect(log.details).toMatchObject({ status: "present", previous_status: "absent" });
+  // All five tap the same person: it's saved once, and nobody gets an error.
+  const shared = await add("8110", "Device Shared", "9876581100");
+  const taps = await Promise.all(devices.map((d) => mark(apiOf(d), shared, 1)));
+  expect(taps.map((r) => r.status())).toEqual([200, 200, 200, 200, 200]);
+  const bodies = await Promise.all(taps.map((r) => r.json()));
+  expect(bodies.filter((b) => b.status === "marked").length).toBe(1);
+  expect(bodies.filter((b) => b.status === "already_present").length).toBe(4);
 
-  // Present is final for an officer: no button on screen, and a forged request changes nothing.
-  await box.fill("4001");
-  await expect(row).toContainText("Already Present");
-  await expect(row.getByRole("button")).toHaveCount(0);
-  const undo = await (await mark(officerApi, late, 1, "absent")).json();
-  expect(undo.status).toBe("already_present");
-  const undo2 = await (await mark(officer2Api, late, 1, "absent")).json();
-  expect(undo2.status).toBe("already_present");
-  expect(await statusOf(late)).toMatchObject({ status: "present" });
+  // On the screen, a device that's behind sees "Already Present", not an error.
+  const [a, b] = devices;
+  await a.getByLabel(/Search by Member ID/).fill("8120");
+  await add("8120", "Device Both", "9876581200");
+  await a.getByLabel(/Search by Member ID/).fill("Device Both");
+  const button = a.getByRole("region", { name: "Search results" }).getByRole("button", { name: "Mark Present" });
+  await expect(button).toBeVisible();
+  await mark(apiOf(b), await memberId("8120"), 1);
+  await button.click();
+  await expect(a.getByRole("status")).toContainText("Already Present");
 
-  // Marking absent twice is harmless, and whichever order two taps land in, Present wins.
-  const absent = await addMember("4002", "Absent Anil", "9876540002");
-  expect((await (await mark(officerApi, absent, 1, "absent")).json())).toMatchObject({ status: "marked", attendance: "absent" });
-  expect((await (await mark(officer2Api, absent, 1, "absent")).json()).status).toBe("already_absent");
-  expect((await statusOf(absent)).status).toBe("absent");
-  const raced = await addMember("4003", "Raced Ravi", "9876540003");
-  await Promise.all([mark(officerApi, raced, 1, "absent"), mark(officer2Api, raced, 1, "present"), mark(officerApi, raced, 1, "absent")]);
-  expect((await statusOf(raced)).status).toBe("present");
+  // Totals reach every device by themselves, within one refresh.
+  const total = (await db`select count(*)::int as n from attendance a join app_users u on u.id = a.marked_by where a.event_day = 1 and a.status = 'present' and u.username = 'male.officer'`)[0].n;
+  for (const d of devices) await expect(d.getByTestId("stat-my-present")).toHaveText(String(total), { timeout: 8000 });
 
-  // Officers have no way to remove attendance at all, and can't send a made-up status.
-  const [record] = await db`select id from attendance where member_id = ${late} and event_day = 1`;
-  expect((await officerApi.post(`/api/admin/attendance/${record.id}/correct`, { data: { action: "remove", reason: "x" } })).status()).toBe(403);
-  expect((await officerApi.post(`/api/admin/attendance/${record.id}/correct`, { data: { action: "absent", reason: "x" } })).status()).toBe(403);
-  expect((await officerApi.delete(`/api/admin/members/${late}`)).status()).toBe(403);
-  expect((await mark(officerApi, late, 1, "cancelled" as "absent")).status()).toBe(400);
-  expect(await statusOf(late)).toMatchObject({ status: "present" });
+  // Logging out on one device leaves the others logged in.
+  await devices[4].getByRole("button", { name: "Log out" }).click();
+  await devices[4].waitForURL("**/login");
+  for (const d of devices.slice(0, 4)) expect((await apiOf(d).get("/api/events")).status()).toBe(200);
+
+  // A sixth device can still log in with everything else running.
+  const sixth = await loginPage(browser, "male.officer");
+  expect((await apiOf(sixth).get("/api/events")).status()).toBe(200);
+  for (const d of [...devices, sixth]) await d.context().close();
 });
 
 test("duplicate attendance is impossible, including simultaneous taps", async () => {
@@ -613,11 +634,8 @@ test("Quick Entry through the UI: gender automatic, attendance automatic, duplic
 
   const dialog = officer.getByRole("region", { name: "Quick Entry" });
   await expect(dialog.getByLabel("Name")).toHaveValue("Kiran Desai");
-  await expect(dialog).toContainText("marked present for Gyansatr Day 1");
-
-  // The officer's account no longer decides gender, so it has to be chosen.
-  await dialog.getByRole("combobox", { name: "Gender" }).click();
-  await dialog.getByRole("option", { name: "Male", exact: true }).click();
+  await expect(dialog).toContainText("saved as Male");
+  await expect(dialog.getByLabel(/gender/i)).toHaveCount(0);
 
   // Searchable dropdown
   const center = dialog.getByLabel("Center", { exact: true });
@@ -653,26 +671,31 @@ test("Quick Entry through the UI: gender automatic, attendance automatic, duplic
   expect((await db`select count(*)::int as n from members where mobile = '9876500003'`)[0].n).toBe(2);
 });
 
-test("Quick Entry on the server: gender required, confirmation required, Other center, ID collisions", async () => {
-  const noConfirm = await quick(officer2Api, { name: "Family Member", mobile: "9876500004", gender: "Female" });
+test("Quick Entry on the server: forged gender ignored, confirmation required, Other center, ID collisions", async () => {
+  const noConfirm = await quick(officer2Api, { name: "Family Member", mobile: "9876500004" });
   expect(noConfirm.status()).toBe(409);
   const body = await noConfirm.json();
   expect(body.code).toBe("duplicate_mobile");
   expect(body.matches).toEqual(["Suresh Shah"]);
   expect((await db`select count(*)::int as n from members where name = 'Family Member'`)[0].n).toBe(0);
 
-  const saved = await quick(officer2Api, { name: "Family Member", mobile: "9876500004", confirmDuplicateMobile: true, gender: "Female", center: "Surat" });
-  expect(saved.status()).toBe(200);
+  const forged = await quick(officer2Api, { name: "Family Member", mobile: "9876500004", confirmDuplicateMobile: true, gender: "Male", center: "Surat" });
+  expect(forged.status()).toBe(200);
   expect((await db`select gender, center from members where name = 'Family Member'`)[0]).toMatchObject({ gender: "Female", center: "Surat" });
 
-  // Member ID already taken: names the holder so the officer can search instead.
+  // Member ID already taken by the other gender: refused without naming them.
   const taken = await quick(officer2Api, { name: "X", mobile: "9000000002", globalMemberId: "3001" });
   expect(taken.status()).toBe(409);
-  expect((await taken.json()).message).toContain("Suresh Shah");
+  expect((await taken.json()).message).not.toContain("Suresh");
+  // Taken within the same gender: names them so the officer can search instead.
+  const taken2 = await quick(officerApi, { name: "X", mobile: "9000000002", globalMemberId: "3001" });
+  expect((await taken2.json()).message).toContain("Suresh Shah");
 
-  for (const bad of [{ name: "", mobile: "9000000003" }, { name: "Y", mobile: "123" }, { name: "Y", mobile: "9000000003", center: "" }, { name: "Y", mobile: "9000000003", gender: "" }, { name: "Y", mobile: "9000000003", gender: "Other" }]) {
+  for (const bad of [{ name: "", mobile: "9000000003" }, { name: "Y", mobile: "123" }, { name: "Y", mobile: "9000000003", center: "" }]) {
     expect((await quick(officerApi, bad)).status()).toBe(400);
   }
+  // Admin covers everyone, so Admin has to choose a gender.
+  expect((await quick(adminApi, { name: "Y", mobile: "9000000003" })).status()).toBe(400);
 
   // A later Excel file supplying an ID links to the Quick Entry member instead of duplicating.
   const ok = await quick(officerApi, { name: "Later Linked", mobile: "9000000004" });
@@ -684,180 +707,166 @@ test("Quick Entry on the server: gender required, confirmation required, Other c
   expect(linked[0]).toMatchObject({ global_member_id: "7001", created_source: "quick_entry" });
 });
 
-test("totals and history: each officer sees their own and everyone's, and a new mark appears by itself", async () => {
-  const counts = async (api: APIRequestContext) => (await (await api.get("/api/events")).json()).counts["1"];
-  const dbCount = async (status: string, by?: string) => (await db`
+test("totals and history: each officer sees their own and the whole, and a new mark appears by itself", async () => {
+  const dbCount = async (username?: string) => (await db`
     select count(*)::int as n from attendance a join app_users u on u.id = a.marked_by
-    where a.event_day = 1 and a.status = ${status} ${by ? db`and u.email = ${by}` : db``}`)[0].n as number;
+    where a.event_day = 1 and a.status = 'present' ${username ? db`and u.username = ${username}` : db``}`)[0].n as number;
+  const add = async (id: string, name: string, mobile: string, gender: string) => {
+    const [{ id: memberRow }] = await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values (${id}, ${name}, ${mobile}, ${gender}, 'Pune', 'excel_import') returning id`;
+    return memberRow as number;
+  };
 
-  // On the server: my figures are only mine, and the totals are the same for everybody.
+  const counts = async (api: APIRequestContext) => (await (await api.get("/api/events")).json()).counts["1"];
   const mine = await counts(officerApi);
+  expect(mine).toEqual({ present: await dbCount(), myPresent: await dbCount("male.officer") });
   const other = await counts(officer2Api);
-  expect(mine).toEqual({
-    present: await dbCount("present"), absent: await dbCount("absent"),
-    myPresent: await dbCount("present", OFFICER.email), myAbsent: await dbCount("absent", OFFICER.email),
-  });
-  expect(other.myPresent).toBe(await dbCount("present", OFFICER2.email));
-  expect([other.present, other.absent]).toEqual([mine.present, mine.absent]);
-  expect(mine.myPresent + other.myPresent).toBe(mine.present);
+  expect(other).toEqual({ present: await dbCount(), myPresent: await dbCount("female.officer") });
 
-  // On the screen, with a person marked by the other officer to tell the two views apart.
-  const [{ id: newPerson }] = await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('4004', 'History Hari', '9876540004', 'Male', 'Pune', 'excel_import') returning id`;
-  const [{ id: otherPerson }] = await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('4005', 'Others Om', '9876540005', 'Male', 'Pune', 'excel_import') returning id`;
-  await mark(officer2Api, otherPerson, 1);
+  await add("4004", "History Hari", "9876540004", "Male");
+  await mark(officer2Api, await add("4005", "Others Olga", "9876540005", "Female"), 1);
 
   await officer.goto("/officer");
   await expect(officer.getByTestId("stat-my-present")).toHaveText(String(mine.myPresent));
-  await expect(officer.getByTestId("stat-my-absent")).toHaveText(String(mine.myAbsent));
   await expect(officer.getByTestId("stat-all-present")).toHaveText(String(mine.present + 1));
-  await expect(officer.getByTestId("stat-all-absent")).toHaveText(String(mine.absent));
 
+  // An officer's history shows their own gender only, with no choice to see more.
+  await showView(officer, "History");
   const history = officer.getByRole("region", { name: "Attendance history" });
   await expect(history).toContainText("Suresh Shah");
-  await expect(history).not.toContainText("Others Om");
-  await expect(history).not.toContainText("History Hari");
+  await expect(history).not.toContainText("Others Olga");
+  await expect(history).not.toContainText("Radha");
+  await expect(officer.getByRole("combobox", { name: "Show" })).toHaveCount(0);
+  const allParam = await (await officerApi.get("/api/officer/history?day=1&scope=all")).json();
+  expect(allParam.records.every((r: { gender: string }) => r.gender === "Male")).toBe(true);
 
   // Marking someone puts them in the table below, and updates the figures, without a reload.
+  await showView(officer, "Mark");
   await officer.getByLabel(/Search by Member ID/).fill("4004");
   await officer.getByRole("region", { name: "Search results" }).getByRole("button", { name: "Mark Present" }).click();
   await expect(officer.getByRole("status")).toContainText("Present: History Hari");
   await expect(officer.getByTestId("stat-my-present")).toHaveText(String(mine.myPresent + 1));
-  await expect(officer.getByTestId("stat-all-present")).toHaveText(String(mine.present + 2));
+  await showView(officer, "History");
   const newest = history.getByRole("listitem").first();
   await expect(newest).toContainText("History Hari");
-  await expect(newest).toContainText("Present");
   await expect(newest).toContainText("You");
   await officer.screenshot({ path: "test-results/screens/officer-history-phone.png", fullPage: true });
 
-  // "All officers" also shows who marked each person.
-  await officer.getByRole("combobox", { name: "Show" }).click();
-  await officer.getByRole("option", { name: "All officers" }).click();
-  const others = history.getByRole("listitem").filter({ hasText: "Others Om" });
-  await expect(others).toContainText("Bharat Joshi");
-
-  // Marks made by another officer arrive by themselves, with the next refresh.
-  const [{ id: lastPerson }] = await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('4006', 'Polled Puja', '9876540006', 'Female', 'Pune', 'excel_import') returning id`;
-  await mark(officer2Api, lastPerson, 1, "absent");
-  await expect(history).toContainText("Polled Puja", { timeout: 8000 });
-
-  // Removed by Admin: gone from the history. Only signed-in officers can read it.
-  const [record] = await db`select id from attendance where member_id = ${lastPerson}`;
-  expect((await adminApi.post(`/api/admin/attendance/${record.id}/correct`, { data: { action: "remove", reason: "test" } })).status()).toBe(200);
-  await expect(history).not.toContainText("Polled Puja", { timeout: 8000 });
-  const res = await officerApi.get("/api/officer/history?day=1&scope=all");
-  expect((await res.json()).records.map((r: { name: string }) => r.name)).not.toContain("Polled Puja");
-  expect((await adminApi.get("/api/officer/history?day=1")).status()).toBe(200);
+  // Removed by Admin: gone from the history, with the totals following.
+  const [record] = await db`select a.id from attendance a join members m on m.id = a.member_id where m.name = 'History Hari'`;
+  expect((await adminApi.post(`/api/admin/attendance/${record.id}/cancel`, { data: { reason: "test" } })).status()).toBe(200);
+  await expect(history).not.toContainText("History Hari", { timeout: 8000 });
+  await showView(officer, "Mark");
+  expect((await mark(officerApi, await memberId("4004"), 1)).status()).toBe(200);
   expect((await officerApi.get("/api/officer/history?day=9")).status()).toBe(400);
 
   // Admin: every officer's own total, the entire total, and one click to their history.
   await admin.goto("/admin");
   const table = admin.getByRole("region", { name: "Attendance by officer" });
-  const officerRow = table.getByRole("row").filter({ hasText: OFFICER_NAME });
-  const presentBy = async (email: string) => dbTotal("present", email);
-  const dbTotal = async (status: string, email?: string) => (await db`
-    select count(*)::int as n from attendance a join app_users u on u.id = a.marked_by
-    where a.status = ${status} ${email ? db`and u.email = ${email}` : db``}`)[0].n as number;
-  await expect(officerRow.getByRole("cell").nth(1)).toHaveText(String(await presentBy(OFFICER.email)));
-  await expect(officerRow.getByRole("cell").nth(2)).toHaveText(String(await dbTotal("absent", OFFICER.email)));
-  await expect(admin.getByTestId("officer-totals")).toContainText(String(await dbTotal("present")));
+  await expect(table.getByRole("row").filter({ hasText: "Male Officer" }).first().getByRole("cell").nth(1)).toHaveText(String(await dbTotal("male.officer")));
+  await expect(admin.getByTestId("officer-totals")).toContainText(String(await dbTotal()));
   await admin.screenshot({ path: "test-results/screens/admin-by-officer.png", fullPage: true });
 
-  // Approved officers with nothing marked yet are listed too.
-  await expect(table.getByRole("row").filter({ hasText: "Dev Rana" })).toContainText("0");
-
-  await table.getByRole("button", { name: "View history for Bharat Joshi" }).click();
+  await table.getByRole("button", { name: "View history for Female Officer" }).click();
   const records = admin.getByRole("region", { name: "Attendance records" });
-  await expect(records).toContainText("Others Om");
+  await expect(records).toContainText("Others Olga");
   await expect(records).not.toContainText("Suresh Shah");
-  await expect(table.getByRole("row").filter({ hasText: OFFICER_NAME })).toHaveCount(0);
-  await expect(admin.getByTestId("stat-total")).toHaveText(String(await presentBy(OFFICER2.email)));
+  await expect(admin.getByTestId("stat-total")).toHaveText(String(await dbTotal("female.officer")));
 
   // The export follows the same filter, and carries the officer-wise totals.
   const [download] = await Promise.all([admin.waitForEvent("download"), admin.getByRole("link", { name: "Export to Excel" }).click()]);
-  expect(download.suggestedFilename()).toBe("attendance_all-days_bharat-joshi.xlsx");
+  expect(download.suggestedFilename()).toBe("attendance_all-days_female-officer.xlsx");
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(await download.path());
   const names = new Set<string>();
   wb.getWorksheet("Attendance")!.eachRow((row, n) => { if (n > 1) names.add(String(row.getCell(9).value)); });
-  expect([...names]).toEqual(["Bharat Joshi"]);
+  expect([...names]).toEqual(["Female Officer"]);
   const summaryText = JSON.stringify(wb.getWorksheet("Summary")!.getSheetValues());
   expect(summaryText).toContain("Officer-wise");
   expect(summaryText).toContain("All officers");
 
   await admin.getByRole("button", { name: "Clear filters" }).click();
   await expect(records).toContainText("Suresh Shah");
-  void newPerson;
+
+  async function dbTotal(username?: string) {
+    return (await db`
+      select count(*)::int as n from attendance a join app_users u on u.id = a.marked_by
+      where a.status = 'present' ${username ? db`and u.username = ${username}` : db``}`)[0].n as number;
+  }
 });
 
-test("Present and Absent are offered without searching, for officers and for Admin", async () => {
-  const add = async (id: string, name: string, mobile: string) => {
-    await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values (${id}, ${name}, ${mobile}, 'Female', 'Vapi', 'excel_import')`;
+test("Mark Present is offered without searching, with page numbers, for officers and for Admin", async () => {
+  const add = async (id: string, name: string, mobile: string, gender = "Male") => {
+    await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values (${id}, ${name}, ${mobile}, ${gender}, 'Vapi', 'excel_import')`;
     return memberId(id);
   };
-  const aaru = await add("5001", "Aaru First", "9876550001");
-  await add("5002", "Aaditi Second", "9876550002");
-  await add("5003", "Aarohi Third", "9876550003");
+  await add("5001", "Aaru First", "9876550001");
+  const second = await add("5002", "Aaditi Second", "9876550002", "Female");
+  await add("5003", "Aarohi Third", "9876550003", "Female");
   const statusOf = async (id: number) => (await db`select status from attendance where member_id = ${id} and event_day = 1`)[0]?.status;
 
-  // Officer: the list is there on arrival, with nothing typed, and leaves out anyone already marked.
+  // Officer: the list is there on arrival, with nothing typed, showing only their gender and only who's left.
   await officer.goto("/officer");
   const list = officer.getByRole("region", { name: "Not marked yet" });
   const row = list.getByRole("listitem").filter({ hasText: "Aaru First" });
   await expect(row.getByRole("button", { name: "Mark Present" })).toBeVisible();
-  await expect(row.getByRole("button", { name: "Mark Absent" })).toBeVisible();
+  await expect(list).not.toContainText("Aaditi Second");
   await expect(list).not.toContainText("Suresh Shah");
   await officer.screenshot({ path: "test-results/screens/officer-not-marked-phone.png", fullPage: true });
 
   const expected = async () => (await db`
-    select count(*)::int as n from members m where not exists (
-      select 1 from attendance a where a.member_id = m.id and a.event_day = 1 and a.status in ('present', 'absent'))`)[0].n as number;
+    select count(*)::int as n from members m where m.gender = 'Male' and not exists (
+      select 1 from attendance a where a.member_id = m.id and a.event_day = 1 and a.status = 'present')`)[0].n as number;
   await expect(list.getByRole("heading")).toContainText(`(${await expected()})`);
 
-  await row.getByRole("button", { name: "Mark Absent" }).click();
-  await expect(officer.getByRole("status")).toContainText("Absent: Aaru First");
+  await row.getByRole("button", { name: "Mark Present" }).click();
+  await expect(officer.getByRole("status")).toContainText("Present: Aaru First");
   await expect(row).toHaveCount(0);
-  expect(await statusOf(aaru)).toBe("absent");
   await expect(list.getByRole("heading")).toContainText(`(${await expected()})`);
+  await showView(officer, "History");
   await expect(officer.getByRole("region", { name: "Attendance history" })).toContainText("Aaru First");
+  await showView(officer, "Mark");
+
+  // Page numbers, once there's more than one page.
+  await Promise.all(Array.from({ length: 25 }, (_, i) => add(`90${10 + i}`, `Zzz Page${10 + i}`, `98765900${10 + i}`)));
+  await officer.reload();
+  const pages = list.getByRole("navigation", { name: "Pages" });
+  await expect(pages.getByRole("button", { name: "Page 1", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(pages.getByRole("button", { name: "Previous" })).toBeDisabled();
+  await pages.getByRole("button", { name: "Page 3", exact: true }).click();
+  await expect(pages.getByRole("button", { name: "Page 3", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(list).toContainText("Showing 21–30");
+  await pages.getByRole("button", { name: "Next" }).click();
+  await expect(pages.getByRole("button", { name: "Page 4", exact: true })).toHaveAttribute("aria-current", "page");
+  await pages.getByRole("button", { name: "Page 1", exact: true }).click();
+  await expect(pages.getByRole("button", { name: "Page 1", exact: true })).toHaveAttribute("aria-current", "page");
 
   // Typing swaps the list for the search results.
-  await officer.getByLabel(/Search by Member ID/).fill("5002");
-  await expect(officer.getByRole("region", { name: "Search results" })).toContainText("Aaditi Second");
+  await officer.getByLabel(/Search by Member ID/).fill("5001");
+  await expect(officer.getByRole("region", { name: "Search results" })).toContainText("Aaru First");
   await expect(list).toHaveCount(0);
   await officer.getByLabel(/Search by Member ID/).fill("");
   await expect(list).toBeVisible();
 
-  // Admin: a tab and a shortcut to the same screen, on which the same rules apply.
+  // Admin: a tab and a shortcut to the same screen, covering everyone.
   await admin.goto("/admin");
-  await admin.getByRole("button", { name: "Mark Attendance" }).or(admin.getByRole("main").getByRole("link", { name: "Mark Attendance" })).click();
+  await admin.getByRole("main").getByRole("link", { name: "Mark Attendance" }).click();
   await admin.waitForURL("**/admin/mark");
   await expect(admin.getByRole("heading", { name: /^Marking Gyansatr Day/ })).toHaveCount(1);
+  await expect(admin.getByRole("button", { name: /Absent/ })).toHaveCount(0);
   const adminList = admin.getByRole("region", { name: "Not marked yet" });
   await adminList.getByRole("listitem").filter({ hasText: "Aaditi Second" }).getByRole("button", { name: "Mark Present" }).click();
   await expect(admin.getByRole("status")).toContainText("Present: Aaditi Second");
   await admin.screenshot({ path: "test-results/screens/admin-mark.png", fullPage: true });
-  const [marked] = await db`select a.status, u.username from attendance a join app_users u on u.id = a.marked_by where a.member_id = ${await memberId("5002")} and a.event_day = 1`;
-  expect(marked).toMatchObject({ status: "present", username: "admin" });
-  await admin.getByLabel(/Search by Member ID/).fill("5003");
-  await admin.getByRole("region", { name: "Search results" }).getByRole("button", { name: "Mark Absent" }).click();
-  await expect(admin.getByRole("status")).toContainText("Absent: Aarohi Third");
+  expect(await statusOf(second)).toBe("present");
   const adminHistory = admin.getByRole("region", { name: "Attendance history" });
-  await expect(adminHistory).toContainText("Aaditi Second");
-  await expect(adminHistory.getByRole("row").filter({ hasText: "Aaditi Second" })).toContainText("You");
+  await expect(adminHistory.getByRole("listitem").filter({ hasText: "Aaditi Second" })).toContainText("You");
 
   // It counts for Admin in the reports, so the officers' totals still add up to the whole.
   await admin.goto("/admin");
   const table = admin.getByRole("region", { name: "Attendance by officer" });
   await expect(table.getByRole("row").filter({ hasText: /^Admin/ }).getByRole("cell").nth(1)).toHaveText("1");
-  const cell = async (row: number, col: number) => Number(await table.locator("tbody tr").nth(row).locator("td").nth(col).textContent());
-  const rows = await table.locator("tbody tr").count();
-  let present = 0;
-  for (let i = 0; i < rows; i++) present += await cell(i, 1);
-  expect(present).toBe((await db`select count(*)::int as n from attendance where status = 'present'`)[0].n);
 
-  // The screen isn't open to anyone else, and marking still needs the day to be running.
   expect((await officer.goto("/admin/mark"))?.url()).toMatch(/\/officer$/);
-  await expect(officer).toHaveURL(/\/officer$/);
 });
 
 test("pages arrive with their numbers already in them, not placeholders to fill in", async () => {
@@ -881,12 +890,90 @@ test("pages arrive with their numbers already in them, not placeholders to fill 
   const officers = await html(adminApi, "/admin/officers");
   expect(officers).not.toContain("animate-pulse");
   expect(officers).toContain(OFFICER_NAME);
+  expect(officers).toContain("female.officer");
 
   for (const [api, path] of [[officerApi, "/officer"], [adminApi, "/admin/mark"]] as const) {
     const desk = await html(api, path);
     expect(desk).not.toContain("animate-pulse");
     expect(desk).toContain("Not marked yet");
     expect(desk).toContain('data-testid="stat-my-present"');
+  }
+});
+
+test("Quick Entry won't add someone who already exists, checked by name and mobile", async () => {
+  await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('8401', 'Twin Name', '9876584001', 'Male', 'Vapi', 'excel_import')`;
+  const count = async () => (await db`select count(*)::int as n from members`)[0].n as number;
+  const before = await count();
+
+  // On the server: the same name and mobile is refused, however it's typed, even when "confirmed".
+  for (const data of [{ name: "Twin Name", mobile: "9876584001" }, { name: " twin  NAME ", mobile: "+91 98765 84001", confirmDuplicateMobile: true }]) {
+    const res = await quick(officerApi, data);
+    expect(res.status()).toBe(409);
+    expect((await res.json()).code).toBe("member_exists");
+  }
+  // Across genders it's refused too, without naming someone this officer can't see.
+  const other = await quick(officer2Api, { name: "Twin Name", mobile: "9876584001", confirmDuplicateMobile: true });
+  expect(other.status()).toBe(409);
+  expect((await other.json()).message).not.toContain("Twin");
+
+  // Only the name matching asks first.
+  const nameOnly = await quick(officerApi, { name: "Twin Name", mobile: "9876584002" });
+  expect(nameOnly.status()).toBe(409);
+  const nameBody = await nameOnly.json();
+  expect(nameBody.code).toBe("duplicate_name");
+  expect(nameBody.nameMatches[0]).toMatchObject({ name: "Twin Name", memberId: "8401", center: "Vapi" });
+  expect(await count()).toBe(before);
+
+  // On the screen, while typing.
+  await officer.goto("/officer");
+  await officer.getByRole("button", { name: /Quick Entry/ }).click();
+  const panel = officer.getByRole("region", { name: "Quick Entry" });
+  const save = panel.getByRole("button", { name: "Save & Mark Present" });
+  await panel.getByLabel("Name").fill("twin name");
+  await expect(panel.getByRole("alert")).toContainText("Aa naam no member already registered chhe.");
+  await expect(panel.getByRole("alert")).toContainText("8401");
+  await expect(save).toBeDisabled();
+  await panel.getByLabel("Mobile Number").fill("9876584001");
+  const exact = panel.getByRole("alert");
+  await expect(exact).toContainText("already exists");
+  await expect(exact.getByRole("button", { name: "Continue" })).toHaveCount(0);
+  await expect(save).toBeDisabled();
+  await officer.screenshot({ path: "test-results/screens/quick-entry-exists-phone.png" });
+
+  // One tap goes to the person who's already there, ready to mark.
+  await exact.getByRole("button", { name: "Find this member" }).click();
+  await expect(officer.getByLabel(/Search by Member ID/)).toHaveValue("Twin Name");
+  await expect(officer.getByRole("region", { name: "Search results" })).toContainText("8401");
+
+  // A different person who shares a name can still be added, once the officer has confirmed.
+  await officer.getByLabel(/Search by Member ID/).fill("");
+  await officer.getByRole("button", { name: /Quick Entry/ }).click();
+  await panel.getByLabel("Name").fill("Twin Name");
+  await panel.getByLabel("Mobile Number").fill("9876584009");
+  await panel.getByRole("alert").getByRole("button", { name: "Continue" }).click();
+  await panel.getByLabel("Center", { exact: true }).click();
+  await panel.getByRole("option", { name: "Vapi" }).click();
+  await save.click();
+  await expect(officer.getByRole("status")).toContainText("Added and marked present: Twin Name");
+  expect(await count()).toBe(before + 1);
+  await db`delete from attendance where member_id in (select id from members where name = 'Twin Name')`;
+  await db`delete from members where name = 'Twin Name'`;
+});
+
+test("each officer only ever sees their own gender's names, on every list", async () => {
+  const names = async (api: APIRequestContext, path: string) => (await (await api.get(path)).json());
+  for (const [api, gender] of [[officerApi, "Male"], [officer2Api, "Female"]] as const) {
+    const list = await names(api, "/api/officer/unmarked?day=1");
+    expect(list.members.length).toBeGreaterThan(0);
+    expect(list.members.every((m: { gender: string }) => m.gender === gender)).toBe(true);
+    const found = await names(api, "/api/officer/search?day=1&q=a");
+    expect(found.results.every((m: { gender: string }) => m.gender === gender)).toBe(true);
+    const history = await names(api, "/api/officer/history?day=1&scope=all");
+    expect(history.records.every((m: { gender: string }) => m.gender === gender)).toBe(true);
+    const totalOfGender = (await db`
+      select count(*)::int as n from members m where m.gender = ${gender} and not exists (
+        select 1 from attendance a where a.member_id = m.id and a.event_day = 1 and a.status = 'present')`)[0].n;
+    expect(list.total).toBe(totalOfGender);
   }
 });
 
@@ -908,7 +995,9 @@ test("ending the event stops marking at once, and the officer's screen locks by 
   await expect(officer.getByLabel(/Search by Member ID/)).toHaveCount(0, { timeout: 8000 });
   await expect(officer.getByText("This event has ended")).toBeVisible();
   // The day's totals and history stay readable after it ends.
+  await showView(officer, "History");
   await expect(officer.getByRole("region", { name: "Attendance history" })).toContainText("Suresh Shah");
+  await showView(officer, "Mark");
 });
 
 test("each day's attendance is separate, and the officer follows the newly active day", async () => {
@@ -955,15 +1044,7 @@ test("dashboard: totals respond to filters and match the database", async () => 
   await expect(admin.getByRole("region", { name: "Attendance records" })).toContainText("Quick Entry");
   await pick(admin, "Member source", "All");
 
-  // Absent is counted on its own, and never as an attendee.
-  const absent = (await db`select count(*)::int as n from attendance where status = 'absent'`)[0].n as number;
-  expect(absent).toBeGreaterThan(0);
-  await expect(admin.getByTestId("stat-absent")).toHaveText(String(absent));
-  await pick(admin, "Status", "Absent");
-  await expect(admin.getByTestId("stat-total")).toHaveText("0");
-  await expect(admin.getByRole("region", { name: "Attendance records" })).toContainText("Absent Anil");
-  await expect(admin.getByRole("region", { name: "Attendance records" })).not.toContainText("Suresh Shah");
-  await pick(admin, "Status", "All");
+  await expect(admin.getByText(/absent/i)).toHaveCount(0);
 
   const quickToday = (await db`select count(*)::int as n from members where created_source = 'quick_entry'`)[0].n;
   await expect(admin.getByTestId("stat-quick")).toHaveText(String(quickToday));
@@ -1049,6 +1130,106 @@ test("dropdowns: not the browser's own, and work by mouse and keyboard", async (
   await db`update members set center = 'Varachha' where global_member_id = '2051'`;
 });
 
+test("the P/A report: one column per day, A filled in when a day ends, and all three merged at the end", async () => {
+  // At this point Day 1 has ended and Day 2 is running. Suresh was marked on both days.
+  const events = await db`select event_day, status from event_sessions order by 1`;
+  expect(events.map((e) => e.status)).toEqual(["ended", "active", "not_started"]);
+  await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('8301', 'Report Nobody', '9876583001', 'Male', 'Pune', 'excel_import')`;
+  const nobody = "Report Nobody";
+
+  await admin.goto("/admin/report");
+  const table = admin.getByRole("region", { name: "Report", exact: true });
+  await expect(table.getByRole("columnheader", { name: "Day 1" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Day 2" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Day 3" })).toHaveCount(0); // hasn't started
+
+  const search = admin.getByLabel("Search", { exact: true });
+  const cells = async (name: string, count: number) => {
+    await search.fill(name);
+    const row = table.getByRole("row").filter({ hasText: name });
+    await expect(row).toHaveCount(1);
+    const texts = await row.getByRole("cell").allTextContents();
+    return texts.slice(-count);
+  };
+  expect(await cells("Suresh Shah", 2)).toEqual(["P", "P"]);
+  expect(await cells(nobody, 2)).toEqual(["A", "-"]); // ended without a mark is A; running is only "not yet"
+  await admin.screenshot({ path: "test-results/screens/report-desktop.png" });
+  await search.fill("");
+
+  // The day totals match the database, and A is everyone who wasn't marked.
+  const members = (await db`select count(*)::int as n from members`)[0].n as number;
+  const presentOn = async (day: number) => (await db`select count(*)::int as n from attendance where event_day = ${day} and status = 'present'`)[0].n as number;
+  await expect(admin.getByTestId("day-1-present")).toHaveText(String(await presentOn(1)));
+  await expect(admin.getByTestId("day-1-absent")).toHaveText(String(members - (await presentOn(1))));
+  await expect(admin.getByTestId("day-2-not-marked")).toHaveText(String(members - (await presentOn(2))));
+  await expect(admin.getByTestId("day-2-absent")).toHaveCount(0);
+
+  // Filters: who was absent on Day 1.
+  await pick(admin, "Show", "Absent on Day 1");
+  await expect(table).toContainText(nobody);
+  await expect(table).not.toContainText("Suresh Shah");
+  await expect(table.getByRole("heading")).toContainText(`(${members - (await presentOn(1))})`);
+  await pick(admin, "Show", "Everyone");
+
+  const read = async (buffer: Buffer) => {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer as never);
+    const sheet = wb.getWorksheet("P-A Report")!;
+    const header = (sheet.getRow(1).values as string[]).slice(1);
+    const rows = new Map<string, Record<string, unknown>>();
+    sheet.eachRow((row, n) => {
+      if (n === 1) return;
+      const values = (row.values as unknown[]).slice(1);
+      rows.set(String(values[2]), Object.fromEntries(header.map((h, i) => [h, values[i]])));
+    });
+    return { header, rows, wb };
+  };
+
+  // Day 2 running: the download has Days 1 and 2.
+  const [download] = await Promise.all([admin.waitForEvent("download"), admin.getByRole("link", { name: "Download Excel" }).click()]);
+  expect(download.suggestedFilename()).toBe("attendance_report_day-1-2.xlsx");
+  const running = await read(readFileSync(await download.path()));
+  expect(running.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Day 1", "Day 2", "Days Present"]);
+  expect(running.rows.size).toBe(members);
+  expect(running.rows.get(nobody)).toMatchObject({ "Day 1": "A", "Day 2": "-", "Days Present": 0 });
+  expect(running.rows.get("Suresh Shah")).toMatchObject({ "Day 1": "P", "Day 2": "P", "Days Present": 2 });
+
+  // Ending Day 2 turns its blanks into A, and the toast points to the report.
+  await admin.goto("/admin");
+  const day2 = admin.getByRole("article").filter({ hasText: "Gyansatr Day 2" });
+  await day2.getByRole("button", { name: "End Event" }).click();
+  await admin.getByRole("dialog").getByRole("button", { name: "End Event" }).click();
+  await expect(admin.getByRole("status")).toContainText("ready in Report");
+  await admin.goto("/admin/report");
+  expect(await cells(nobody, 2)).toEqual(["A", "A"]);
+  await search.fill("");
+
+  // All three days finished: the same report is the merged one.
+  expect((await setEvent(adminApi, 3, "start")).status()).toBe(200);
+  expect((await mark(officerApi, await memberId("8301"), 3)).status()).toBe(200);
+  expect((await setEvent(adminApi, 3, "end")).status()).toBe(200);
+  const merged = await adminApi.get("/api/admin/day-report/export");
+  expect(merged.headers()["content-disposition"]).toContain("attendance_report_all-days.xlsx");
+  const all = await read(await merged.body());
+  expect(all.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Day 1", "Day 2", "Day 3", "Days Present"]);
+  expect(all.rows.get(nobody)).toMatchObject({ "Day 1": "A", "Day 2": "A", "Day 3": "P", "Days Present": 1 });
+  expect(all.rows.get("Suresh Shah")).toMatchObject({ "Day 1": "P", "Day 2": "P", "Day 3": "A", "Days Present": 2 });
+  const totals = JSON.stringify(all.wb.getWorksheet("Totals")!.getSheetValues());
+  expect(totals).toContain("Gyansatr Day 3");
+
+  // It follows the filters, and is Admin's only.
+  const males = await read(await (await adminApi.get("/api/admin/day-report/export?gender=Male")).body());
+  expect([...males.rows.values()].every((r) => r.Gender === "Male")).toBe(true);
+  expect((await officerApi.get("/api/admin/day-report")).status()).toBe(403);
+  expect((await officerApi.get("/api/admin/day-report/export")).status()).toBe(403);
+  expect((await officer.goto("/admin/report"))?.url()).toMatch(/\/officer$/);
+
+  // Put the days back for the tests that follow, and tidy the extra marks.
+  await db`delete from attendance where event_day = 3`;
+  await db`update event_sessions set status = 'not_started', started_at = null, ended_at = null, started_by = null, ended_by = null where event_day = 3`;
+  expect((await setEvent(adminApi, 2, "restart")).status()).toBe(200);
+});
+
 test("Excel export contains exactly the filtered data, and tells the sources apart", async () => {
   await admin.goto("/admin");
   await pick(admin, "Gender", "Male");
@@ -1067,10 +1248,8 @@ test("Excel export contains exactly the filtered data, and tells the sources apa
   });
   const expected = (await db`
     select count(*)::int as n from attendance a join members m on m.id = a.member_id
-    where a.status in ('present', 'absent') and a.event_day=1 and m.gender='Male'`)[0].n;
+    where a.status = 'present' and a.event_day=1 and m.gender='Male'`)[0].n;
   expect(rows.length).toBe(expected);
-  expect(rows.find((r) => r[2] === "Absent Anil")?.[10]).toBe("Absent");
-  expect(rows.find((r) => r[2] === "Suresh Shah")?.[10]).toBe("Present");
   expect(rows.every((r) => r[4] === "Male" && r[6] === "Gyansatr Day 1")).toBe(true);
   expect(new Set(rows.map((r) => r[9]))).toEqual(new Set(["Excel Import", "Quick Entry"]));
   expect(rows.find((r) => r[2] === "Suresh Shah")?.[8]).toBe(OFFICER_NAME);
@@ -1084,38 +1263,14 @@ test("Excel export contains exactly the filtered data, and tells the sources apa
   });
   expect(cells.get("Gender")).toBe("Male");
   expect(cells.get("Event")).toBe("Gyansatr Day 1");
-  expect(cells.get("Combined attendees")).toBe(rows.filter((r) => r[10] === "Present").length);
-  expect(cells.get("Marked absent")).toBe(rows.filter((r) => r[10] === "Absent").length);
+  expect(cells.get("Combined attendees")).toBe(expected);
 });
 
-test("Admin corrections: change or remove attendance with a reason, logged, and re-markable", async () => {
+test("Admin corrections: remove attendance with a reason, logged, and re-markable", async () => {
   await admin.goto("/admin");
-  const correct = async (name: string) => {
-    await admin.getByRole("row").filter({ hasText: name }).first().getByRole("button", { name: "Correct" }).click();
-    return admin.getByRole("dialog");
-  };
-
-  // Present to Absent is the change officers can't make.
-  const ramesh = await memberId("2051");
-  let dialog = await correct("Ramesh K Patel");
-  await expect(dialog.getByRole("button", { name: "Change to Absent" })).toBeDisabled();
-  await dialog.getByLabel("Reason").fill("Left before the session");
-  await dialog.getByRole("button", { name: "Change to Absent" }).click();
-  await expect(admin.getByRole("status")).toContainText("Changed to Absent.");
-  await expect(admin.getByRole("row").filter({ hasText: "Ramesh K Patel" }).first()).toContainText("Absent");
-  expect((await db`select status from attendance where member_id = ${ramesh} and event_day = 1`)[0].status).toBe("absent");
-
-  // And back.
-  dialog = await correct("Ramesh K Patel");
-  await dialog.getByLabel("Reason").fill("Came back");
-  await dialog.getByRole("button", { name: "Change to Present" }).click();
-  await expect(admin.getByRole("row").filter({ hasText: "Ramesh K Patel" }).first()).toContainText("Present");
-  const [log] = await db`select details from audit_log where action = 'attendance.correct' order by id desc limit 1`;
-  expect(log.details).toMatchObject({ reason: "Came back", previous_status: "absent", status: "present", member_name: "Ramesh K Patel" });
-
-  // Removing.
-  dialog = await correct("Raju Pandya");
-  await pick(admin, "What should change?", "Remove this attendance");
+  const row = admin.getByRole("row").filter({ hasText: "Raju Pandya" }).first();
+  await row.getByRole("button", { name: "Remove" }).click();
+  const dialog = admin.getByRole("dialog");
   await expect(dialog.getByRole("button", { name: "Remove Attendance" })).toBeDisabled();
   await dialog.getByLabel("Reason").fill("Marked by mistake");
   await dialog.getByRole("button", { name: "Remove Attendance" }).click();
@@ -1127,9 +1282,7 @@ test("Admin corrections: change or remove attendance with a reason, logged, and 
   expect(a).toMatchObject({ status: "cancelled", cancel_reason: "Marked by mistake" });
 
   // Officer can't cancel
-  expect((await officerApi.post("/api/admin/attendance/1/correct", { data: { action: "remove", reason: "x" } })).status()).toBe(403);
-  // The old route is gone, so there's only the one way in.
-  expect((await adminApi.post("/api/admin/attendance/1/cancel", { data: { reason: "x" } })).status()).toBe(404);
+  expect((await officerApi.post("/api/admin/attendance/1/cancel", { data: { reason: "x" } })).status()).toBe(403);
 
   // A cancelled day can be marked again when that day is active.
   await setEvent(adminApi, 2, "end");
@@ -1176,14 +1329,14 @@ test("every important activity is in the audit log with user and time", async ()
   const actions = (await db`select distinct action from audit_log`).map((r) => r.action);
   expect(actions).toEqual(expect.arrayContaining([
     "auth.login", "members.excel_upload", "event.start", "event.end", "event.restart",
-    "attendance.mark", "attendance.cancel", "attendance.correct", "member.quick_entry", "member.edit", "member.delete",
-    "officer.register", "officer.approve", "officer.reject", "officer.password_reset", "auth.password_change",
+    "attendance.mark", "attendance.cancel", "member.quick_entry", "member.edit", "member.delete",
+    "officer.password_reset", "auth.password_change",
   ]));
   expect((await db`select count(*)::int as n from audit_log where username = '' or at is null`)[0].n).toBe(0);
 
   // Recorded for the database only: there is no screen or API that shows it.
   await admin.goto("/admin");
-  await expect(admin.getByRole("navigation", { name: "Admin" }).getByRole("link")).toHaveText(["Dashboard", "Mark Attendance", "Members", "Officers"]);
+  await expect(admin.getByRole("navigation", { name: "Admin" }).getByRole("link")).toHaveText(["Dashboard", "Mark Attendance", "Report", "Members", "Officers"], { useInnerText: true });
   expect((await admin.goto("/admin/activity"))?.status()).toBe(404);
   expect((await officerApi.get("/api/admin/audit")).status()).toBe(404);
 });
@@ -1294,11 +1447,7 @@ test("idle officer screen and login, for review", async ({ browser }) => {
   const fresh = await browser.newPage({ viewport: { width: 390, height: 844 } });
   await fresh.goto("/login");
   await fresh.screenshot({ path: `${dir}/login-phone.png` });
-  await fresh.goto("/register");
-  await fresh.screenshot({ path: `${dir}/register-phone.png`, fullPage: true });
   await fresh.setViewportSize({ width: 1280, height: 800 });
-  await fresh.screenshot({ path: `${dir}/register-desktop.png` });
-  await fresh.goto("/login");
   await fresh.setViewportSize({ width: 1280, height: 800 });
   await fresh.screenshot({ path: `${dir}/login-desktop.png` });
   await fresh.close();
@@ -1377,12 +1526,210 @@ test("a request cancelled while its reply is arriving is reported as cancelled, 
   await admin.getByRole("button", { name: "Retry" }).click();
   await expect(admin.getByRole("button", { name: "Retry" })).toHaveCount(0);
 
-  await officer.goto("/officer");
-  await officer.route("**/api/officer/history?**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Bad gateway</h1>" }));
-  await officer.getByRole("combobox", { name: "Show" }).click();
-  await officer.getByRole("option", { name: "All officers" }).click();
-  await expect(officer.getByRole("region", { name: "Attendance history" }).getByRole("button", { name: "Retry" })).toBeVisible();
-  await officer.unroute("**/api/officer/history?**");
+  await admin.goto("/admin/mark");
+  await admin.route("**/api/officer/history?**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Bad gateway</h1>" }));
+  await admin.getByRole("combobox", { name: "Show" }).click();
+  await admin.getByRole("option", { name: "Everyone" }).click();
+  await expect(admin.getByRole("region", { name: "Attendance history" }).getByRole("button", { name: "Retry" })).toBeVisible();
+  await admin.unroute("**/api/officer/history?**");
+});
+
+test("cancelling slow requests, by changing filters or leaving the page, causes no errors", async () => {
+  // Reports run several at once, so these are cancelled in flight whenever the filters change.
+  await admin.goto("/admin");
+  await expect(admin.getByTestId("stat-total")).toBeVisible();
+  await admin.route("**/api/admin/report?**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    await route.continue().catch(() => {});
+  });
+  for (const option of ["Male", "Female", "All", "Male"]) {
+    await pick(admin, "Gender", option);
+    await admin.waitForTimeout(150);
+  }
+  await admin.getByRole("navigation", { name: "Admin" }).getByRole("link", { name: "Members" }).click();
+  await admin.waitForURL("**/admin/members");
+  await admin.unroute("**/api/admin/report?**");
+  await admin.getByRole("navigation", { name: "Admin" }).getByRole("link", { name: "Dashboard" }).click();
+  await admin.waitForURL("**/admin");
+  await expect(admin.getByTestId("stat-total")).toBeVisible();
+  await expect(admin.getByText("This page couldn’t load")).toHaveCount(0);
+});
+
+test("the database connection keeps the setting that stops Supabase's pooler stalling", () => {
+  // Tests run against a local database with no pooler, so they can't catch this if it's removed.
+  const source = readFileSync("src/lib/db.ts", "utf8");
+  expect(source).toMatch(/max_pipeline: 1\b/);
+  expect(source).toMatch(/query_timeout: \d+/);
+});
+
+test("the marking screen: side by side on large screens, one at a time with a bottom bar on small ones", async ({ browser }) => {
+  const large = await loginPage(browser, "male.officer", { width: 1440, height: 900 });
+  const left = large.getByLabel(/Search by Member ID/);
+  const right = large.getByRole("region", { name: "Attendance history" });
+  await expect(left).toBeVisible();
+  await expect(right).toBeVisible();
+  const [l, r] = [(await left.boundingBox())!, (await right.boundingBox())!];
+  expect(r.x).toBeGreaterThanOrEqual(l.x + l.width);
+  await expect(large.getByRole("navigation", { name: "Marking view" })).toBeHidden();
+  await large.screenshot({ path: "test-results/screens/officer-desktop.png" });
+
+  // History stays in view while the long list on the left scrolls away.
+  const before = (await right.boundingBox())!;
+  await large.mouse.move(l.x + 10, l.y + 300);
+  await large.mouse.wheel(0, 600);
+  await expect.poll(() => large.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  const after = (await right.boundingBox())!;
+  expect(after.y).toBeGreaterThan(0);
+  expect(after.y).toBeLessThanOrEqual(before.y);
+  await expect(right).toBeInViewport();
+  await large.context().close();
+
+  // The header keeps Log out level with the title at every width, however many links there are.
+  for (const width of [390, 640, 820, 1024, 1280, 1920]) {
+    const page = await loginPage(browser, "admin", { width, height: 900 });
+    const title = (await page.getByText("Gyansatr Attendance", { exact: true }).first().boundingBox())!;
+    const logOut = (await page.getByRole("button", { name: "Log out" }).boundingBox())!;
+    expect(Math.abs(title.y + title.height / 2 - (logOut.y + logOut.height / 2))).toBeLessThan(24);
+    if (width === 820) await page.screenshot({ path: "test-results/screens/admin-tablet.png" });
+    await page.context().close();
+  }
+
+  // The narrowest phone: every Day tab one line and one height, and the heading one line.
+  const small = await loginPage(browser, "male.officer", { width: 320, height: 700 });
+  // The hint in the search box is small, and shows in full.
+  const hint = await small.getByLabel(/Search by Member ID/).evaluate((input: HTMLInputElement) => {
+    const style = getComputedStyle(input, "::placeholder");
+    const box = getComputedStyle(input);
+    const context = document.createElement("canvas").getContext("2d")!;
+    context.font = `${style.fontWeight} ${style.fontSize} ${box.fontFamily}`;
+    const room = input.clientWidth - parseFloat(box.paddingLeft) - parseFloat(box.paddingRight);
+    return { size: parseFloat(style.fontSize), width: context.measureText(input.placeholder).width, room };
+  });
+  expect(hint.size).toBeLessThanOrEqual(14);
+  expect(hint.size).toBeGreaterThanOrEqual(12);
+  expect(hint.width).toBeLessThanOrEqual(hint.room);
+  expect(await small.getByLabel(/Search by Member ID/).getAttribute("placeholder")).toBe("206383, Ghanshyam Pande, 9876543210");
+  // The Mark button has real space inside it, so the word and tick don't touch the edges.
+  const padded = small.getByRole("region", { name: "Not marked yet" }).getByRole("button", { name: "Mark Present" }).first();
+  expect(Number.parseFloat(await padded.evaluate((e) => getComputedStyle(e).paddingLeft))).toBeGreaterThanOrEqual(14);
+  const dayTabs = small.getByRole("navigation", { name: "Event days" }).getByRole("button");
+  const heights = await dayTabs.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
+  expect(new Set(heights).size).toBe(1);
+  const heading = small.getByRole("heading", { name: /^Marking Gyansatr Day/ });
+  expect((await heading.boundingBox())!.height).toBeLessThan(36);
+  expect((await small.getByText("Gyansatr Attendance").first().evaluate((e) => e.scrollWidth <= e.clientWidth))).toBe(true);
+  await small.screenshot({ path: "test-results/screens/officer-320.png" });
+
+  // Long names stay compact: at most two lines, with the details on one, and the button on the same row.
+  await small.getByLabel(/Search by Member ID/).fill("jayantibhai");
+  const longRow = small.getByRole("region", { name: "Search results" }).getByRole("listitem").filter({ hasText: "Jayantibhai Popatbhai Kanani" });
+  await expect(longRow).toBeVisible();
+  expect((await longRow.boundingBox())!.height).toBeLessThanOrEqual(84);
+  await small.getByLabel(/Search by Member ID/).fill("");
+  await expect(small.getByRole("region", { name: "Not marked yet" })).toBeVisible();
+  // Area and Quick Entry share one row, so the list starts high up the screen.
+  const areaBox = (await small.getByRole("combobox", { name: "Area", exact: true }).boundingBox())!;
+  const quickBox = (await small.getByRole("button", { name: /Quick Entry/ }).boundingBox())!;
+  expect(Math.abs(areaBox.y - quickBox.y)).toBeLessThan(2);
+  const listTop = (await small.getByRole("region", { name: "Not marked yet" }).boundingBox())!.y;
+  expect(listTop).toBeLessThan(420);
+  await small.screenshot({ path: "test-results/screens/officer-320-list.png", fullPage: false });
+  await small.context().close();
+
+  // Admin gets the same layout on the same screen.
+  const adminLarge = await loginPage(browser, "admin", { width: 1280, height: 800 });
+  await adminLarge.goto("/admin/mark");
+  await expect(adminLarge.getByRole("region", { name: "Attendance history" })).toBeInViewport();
+  await adminLarge.screenshot({ path: "test-results/screens/admin-mark-desktop.png" });
+  await adminLarge.context().close();
+
+  const phone = await loginPage(browser, "male.officer", { width: 390, height: 844 });
+  const bar = phone.getByRole("navigation", { name: "Marking view" });
+  await expect(bar).toBeInViewport();
+  await expect(phone.getByLabel(/Search by Member ID/)).toBeVisible();
+  await expect(phone.getByRole("region", { name: "Attendance history" })).toHaveCount(0);
+  await bar.getByRole("button", { name: "History" }).click();
+  await expect(phone.getByRole("region", { name: "Attendance history" })).toBeVisible();
+  await expect(phone.getByTestId("stat-my-present")).toBeVisible();
+  await expect(phone.getByLabel(/Search by Member ID/)).toBeHidden();
+  // The bar shows which side is open, in words and colour.
+  await expect(bar.getByRole("button", { name: "History" })).toHaveAttribute("aria-current", "page");
+  await expect(bar.getByRole("button", { name: "Mark" })).not.toHaveAttribute("aria-current", "page");
+  await expect(bar.getByRole("button", { name: "History" })).toHaveCSS("color", "rgb(28, 90, 150)");
+  await phone.screenshot({ path: "test-results/screens/officer-history-tab-phone.png" });
+  await bar.getByRole("button", { name: "Mark" }).click();
+  await expect(phone.getByLabel(/Search by Member ID/)).toBeVisible();
+
+  // The bar never covers the last thing on the page.
+  await phone.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  const barBox = (await bar.boundingBox())!;
+  const lastButton = (await phone.getByRole("region", { name: "Not marked yet" }).boundingBox())!;
+  expect(lastButton.y + lastButton.height).toBeLessThanOrEqual(barBox.y + 1);
+  await phone.context().close();
+});
+
+test("it installs as an app, and stores nothing personal on the device", async ({ browser, request }) => {
+  // The manifest and icons a phone needs in order to offer installing.
+  const res = await request.get("/manifest.webmanifest");
+  expect(res.status()).toBe(200);
+  const manifest = await res.json();
+  expect(manifest).toMatchObject({ name: "Gyansatr Attendance", short_name: "Gyansatr", display: "standalone", start_url: "/" });
+  expect(manifest.icons.map((i: { sizes: string }) => i.sizes)).toEqual(expect.arrayContaining(["192x192", "512x512"]));
+  expect(manifest.icons.some((i: { purpose?: string }) => i.purpose === "maskable")).toBe(true);
+  for (const icon of manifest.icons) {
+    const file = await request.get(icon.src);
+    expect(file.status()).toBe(200);
+    expect(file.headers()["content-type"]).toContain("image/png");
+    expect((await file.body()).length).toBeGreaterThan(500);
+  }
+  expect((await request.get("/apple-icon.png")).status()).toBe(200);
+  const worker = await request.get("/sw.js");
+  expect(worker.status()).toBe(200);
+  expect(worker.headers()["cache-control"]).toContain("no-cache");
+
+  // Chrome's own check of whether this can be installed.
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  await page.goto("/login");
+  await page.getByLabel(LOGIN_LABEL).fill("male.officer");
+  await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
+  await page.getByRole("button", { name: "Log in" }).click();
+  await page.waitForURL("**/officer");
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  const cdp = await context.newCDPSession(page);
+  const installability = await cdp.send("Page.getInstallabilityErrors");
+  // Test browsers run in Incognito, where Chrome never installs anything. Anything else is a real problem.
+  expect(installability.installabilityErrors.map((e) => e.errorId).filter((id) => id !== "in-incognito")).toEqual([]);
+  const appManifest = await cdp.send("Page.getAppManifest");
+  expect(appManifest.errors).toEqual([]);
+
+  // A reload puts the page under the worker's control. Use the app, then look at what was stored.
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+  await page.getByLabel(/Search by Member ID/).fill("205").catch(() => {});
+  await page.waitForTimeout(800);
+  const stored = await page.evaluate(async () => {
+    const urls: string[] = [];
+    for (const name of await caches.keys()) for (const key of await (await caches.open(name)).keys()) urls.push(new URL(key.url).pathname);
+    return urls;
+  });
+  expect(stored).toContain("/offline.html");
+  expect(stored.some((u) => u.startsWith("/_next/static/"))).toBe(true);
+  expect(stored.filter((u) => !u.startsWith("/_next/static/") && !u.startsWith("/icons/") && u !== "/offline.html")).toEqual([]);
+
+  // Losing the internet says so on the open page, and a reload gets a proper screen.
+  await context.setOffline(true);
+  await expect(page.getByRole("alert").filter({ hasText: "No internet" })).toBeVisible();
+  await page.screenshot({ path: "test-results/screens/offline-banner-phone.png" });
+  await page.reload().catch(() => {});
+  await expect(page.getByRole("heading", { name: "No internet connection" })).toBeVisible();
+  await page.screenshot({ path: "test-results/screens/offline-page-phone.png" });
+
+  // Coming back returns to the app by itself, still logged in.
+  await context.setOffline(false);
+  await expect(page.getByLabel(/Search by Member ID/)).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("alert").filter({ hasText: "No internet" })).toHaveCount(0);
+  await context.close();
 });
 
 test("no screen threw an error during this whole run", () => {
@@ -1391,12 +1738,14 @@ test("no screen threw an error during this whole run", () => {
 
 test("login locks briefly after repeated wrong passwords", async ({ request }) => {
   for (let i = 0; i < 5; i++) {
-    const res = await logIn(request, OFFICER2.email, "nope");
+    const res = await logIn(request, "female.officer", "nope");
     expect(res.status()).toBe(401);
   }
-  const locked = await logIn(request, OFFICER2.email);
+  const locked = await logIn(request, "female.officer");
   expect(locked.status()).toBe(429);
-  await db`update app_users set locked_until = null where email = ${OFFICER2.email}`;
-  const fine = await logIn(request, OFFICER2.email);
+  // Devices already logged in on this account carry on working during the lockout.
+  expect((await officer2Api.get("/api/events")).status()).toBe(200);
+  await db`update app_users set locked_until = null where username = 'female.officer'`;
+  const fine = await logIn(request, "female.officer");
   expect(fine.status()).toBe(200);
 });

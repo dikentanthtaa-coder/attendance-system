@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { Ban, Check, Circle, CircleCheck, CircleDot, CircleX, Clock, FileSpreadsheet, UserPlus, type LucideIcon } from "lucide-react";
-import { ATTENDANCE_LABEL, OFFICER_STATUS_LABEL, SOURCE_LABEL, STATUS_LABEL, type AttendanceStatus, type EventStatus, type Gender, type MemberSource, type OfficerStatus } from "@/lib/shared";
+import { Check, Circle, CircleDot, FileSpreadsheet, UserPlus, type LucideIcon } from "lucide-react";
+import { SOURCE_LABEL, STATUS_LABEL, type DayCell, type EventStatus, type Gender, type MemberSource } from "@/lib/shared";
 
 const TONES = {
   neutral: "bg-active text-ink",
@@ -14,9 +14,9 @@ const TONES = {
 
 export type BadgeTone = keyof typeof TONES;
 
-/** `compact` is for tight spaces on a phone: it drops the icon there, and the word may wrap. */
+/** `compact` is for tight spaces on a phone: plain coloured words, on one line and all the same height. */
 export function Badge({ tone = "neutral", icon: Icon, compact, children }: { tone?: BadgeTone; icon?: LucideIcon; compact?: boolean; children: ReactNode }) {
-  const fit = compact ? "px-2 leading-tight sm:px-2.5 sm:whitespace-nowrap" : "px-2.5 whitespace-nowrap";
+  const fit = compact ? "whitespace-nowrap max-sm:bg-transparent max-sm:p-0 max-sm:text-[11px] sm:px-2.5" : "px-2.5 whitespace-nowrap";
   return (
     <span className={`inline-flex items-center gap-1 rounded-full py-0.5 text-xs font-semibold ${fit} ${TONES[tone]}`}>
       {Icon && <Icon aria-hidden size={12} strokeWidth={2.5} className={`shrink-0 ${compact ? "hidden sm:block" : ""}`} />}
@@ -37,21 +37,16 @@ export function StatusBadge({ status, compact }: { status: EventStatus; compact?
   return <Badge tone={tone} icon={icon} compact={compact}>{STATUS_LABEL[status]}</Badge>;
 }
 
-export function AttendanceBadge({ status }: { status: AttendanceStatus }) {
-  return status === "present"
-    ? <Badge tone="ok" icon={CircleCheck}>{ATTENDANCE_LABEL.present}</Badge>
-    : <Badge tone="danger" icon={CircleX}>{ATTENDANCE_LABEL.absent}</Badge>;
-}
-
-const OFFICER_LOOK: Record<OfficerStatus, { tone: BadgeTone; icon: LucideIcon }> = {
-  pending: { tone: "warn", icon: Clock },
-  approved: { tone: "ok", icon: Check },
-  rejected: { tone: "danger", icon: Ban },
+const DAY_CELL_LOOK: Record<DayCell, { className: string; label: string }> = {
+  P: { className: "bg-ok text-white", label: "Present" },
+  A: { className: "bg-danger text-white", label: "Absent" },
+  "-": { className: "bg-active text-muted", label: "Not marked yet" },
 };
 
-export function OfficerStatusBadge({ status }: { status: OfficerStatus }) {
-  const { tone, icon } = OFFICER_LOOK[status];
-  return <Badge tone={tone} icon={icon}>{OFFICER_STATUS_LABEL[status]}</Badge>;
+/** P or A as one strong letter, easy to scan down a column. The full word is there for screen readers. */
+export function DayCellBadge({ value }: { value: DayCell }) {
+  const { className, label } = DAY_CELL_LOOK[value];
+  return <span title={label} aria-label={label} className={`inline-flex size-6 items-center justify-center rounded-md text-xs font-bold ${className}`}>{value}</span>;
 }
 
 export function GenderBadge({ gender }: { gender: Gender }) {

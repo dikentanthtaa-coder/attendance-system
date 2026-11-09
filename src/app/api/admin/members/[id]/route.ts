@@ -12,6 +12,7 @@ const editSchema = z.object({
   globalMemberId: z.string().max(50, "Member ID is too long.").transform(normalizeMemberId),
   name: z.string().max(120, "Name is too long.").transform(normalizeName).pipe(z.string().min(1, "Name is required.")),
   mobile: z.string().transform((v, ctx) => {
+    if (!v.trim()) return null; // not everyone has a number on record
     const mobile = normalizeMobile(v);
     if (!mobile) {
       ctx.addIssue({ code: "custom", message: "Enter a valid 10-digit mobile number." });

@@ -1,10 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CircleX, Clock, Download, FileUp, Hash, History, Inbox, MapPin, Mars, Pencil, Phone, Scale, SlidersHorizontal, UserPlus, UserRoundCheck, UsersRound, Venus, X } from "lucide-react";
+import { Clock, Download, FileUp, Hash, History, Inbox, MapPin, Mars, Phone, Scale, SlidersHorizontal, Trash2, UserPlus, UserRoundCheck, UsersRound, Venus, X } from "lucide-react";
 import {
   Alert,
-  AttendanceBadge,
   Button,
   Card,
   CardHeader,
@@ -28,22 +27,20 @@ import {
   type SelectOption,
 } from "@/components/ui";
 import { api } from "@/lib/client-api";
-import { formatDate, formatDateTime, formatTime, type AttendanceStatus, type Gender, type MemberSource } from "@/lib/shared";
+import { formatDate, formatDateTime, formatTime, type Gender, type MemberSource } from "@/lib/shared";
 
-type Filters = { event: string; date: string; gender: string; center: string; source: string; status: string; officer: string };
+type Filters = { event: string; date: string; gender: string; center: string; source: string; officer: string };
 
-const NO_FILTERS: Filters = { event: "all", date: "all", gender: "all", center: "all", source: "all", status: "all", officer: "all" };
+const NO_FILTERS: Filters = { event: "all", date: "all", gender: "all", center: "all", source: "all", officer: "all" };
 
-type DayRow = { eventDay: number; eventName: string; date: string; male: number; female: number; total: number; absent: number };
+type DayRow = { eventDay: number; eventName: string; date: string; male: number; female: number; total: number };
 
-type OfficerRow = { id: string; name: string; present: number; absent: number };
+type OfficerRow = { id: string; name: string; present: number };
 
 type Summary = {
   male: number;
   female: number;
   total: number;
-  absent: number;
-  records: number;
   uniqueMembers: number;
   fromExcel: number;
   fromQuickEntry: number;
@@ -56,12 +53,11 @@ type Summary = {
 type AttendanceRecord = {
   id: number;
   event_name: string;
-  status: AttendanceStatus;
   marked_at: string;
   marked_by: string;
   global_member_id: string | null;
   name: string;
-  mobile: string;
+  mobile: string | null;
   gender: Gender;
   center: string;
   created_source: MemberSource;
@@ -90,12 +86,6 @@ const GENDER_OPTIONS: SelectOption[] = [
   { value: "Female", label: "Female" },
 ];
 
-const STATUS_OPTIONS: SelectOption[] = [
-  { value: "all", label: "All" },
-  { value: "present", label: "Present" },
-  { value: "absent", label: "Absent" },
-];
-
 const SOURCE_OPTIONS: SelectOption[] = [
   { value: "all", label: "All" },
   { value: "excel_import", label: "Excel Import" },
@@ -112,7 +102,7 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
   const [report, setReport] = useState<Report>(initial);
   const [updatedAt, setUpdatedAt] = useState<Date>(() => new Date(generatedAt));
   const [error, setError] = useState("");
-  const [correcting, setCorrecting] = useState<AttendanceRecord | null>(null);
+  const [removing, setRemoving] = useState<AttendanceRecord | null>(null);
 
   const query = useMemo(() => new URLSearchParams(filters).toString(), [filters]);
 
@@ -160,7 +150,7 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
       </div>
 
       <Card aria-label="Filters" className={`${filtersOpen ? "block" : "hidden"} p-4 md:block`}>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
           <FilterSelect id="f-event" label="Event" value={filters.event} onChange={(v) => setFilter("event", v)} options={EVENT_OPTIONS} />
           <FilterSelect
             id="f-date"
@@ -178,7 +168,6 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
             options={[{ value: "all", label: "All Centers" }, ...report.options.centers.map((c) => ({ value: c, label: c }))]}
           />
           <FilterSelect id="f-source" label="Member source" value={filters.source} onChange={(v) => setFilter("source", v)} options={SOURCE_OPTIONS} />
-          <FilterSelect id="f-status" label="Status" value={filters.status} onChange={(v) => setFilter("status", v)} options={STATUS_OPTIONS} />
           <FilterSelect
             id="f-officer"
             label="Marked by"
@@ -227,24 +216,24 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
           title="Attendance report"
           description={
             <>
-              {s.records} records: {s.total} present, {s.absent} absent. Updated {formatTime(updatedAt)}
+              {s.total} records: {s.fromExcel} Excel Import, {s.fromQuickEntry} Quick Entry. Updated {formatTime(updatedAt)}
             </>
           }
           actions={<div className="hidden md:block"><ExportLink query={query} /></div>}
         />
-        <RecordsTable records={report.records} onCorrect={setCorrecting} />
-        <Pagination page={page} pageSize={report.pageSize} total={s.records} onPage={setPage} />
+        <RecordsTable records={report.records} onRemove={setRemoving} />
+        <Pagination page={page} pageSize={report.pageSize} total={s.total} onPage={setPage} />
       </Card>
 
-      <Modal open={correcting !== null} onClose={() => setCorrecting(null)} title="Correct attendance">
-        {correcting && (
-          <CorrectionForm
-            key={correcting.id}
-            record={correcting}
-            onClose={() => setCorrecting(null)}
-            onDone={(message) => {
-              setCorrecting(null);
-              toast("success", message);
+      <Modal open={removing !== null} onClose={() => setRemoving(null)} title="Remove attendance">
+        {removing && (
+          <RemoveForm
+            key={removing.id}
+            record={removing}
+            onClose={() => setRemoving(null)}
+            onDone={() => {
+              setRemoving(null);
+              toast("success", "Attendance removed.");
               load();
             }}
           />
@@ -271,9 +260,8 @@ function ExportLink({ query }: { query: string }) {
 function SummaryCards({ s }: { s: Summary }) {
   const difference = s.male - s.female;
   return (
-    <section aria-label="Summary" className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
-      <StatCard tone="hero" icon={UsersRound} label="Combined attendees" value={s.total} note={`${s.uniqueMembers} unique members`} testId="stat-total" className="col-span-2 lg:col-span-1" />
-      <StatCard tone="danger" icon={CircleX} label="Marked absent" value={s.absent} testId="stat-absent" className="col-span-2 lg:col-span-1" />
+    <section aria-label="Summary" className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-5">
+      <StatCard tone="hero" icon={UsersRound} label="Combined attendees" value={s.total} note={`${s.uniqueMembers} unique members`} testId="stat-total" className="col-span-2 md:col-span-4 lg:col-span-1" />
       <StatCard tone="male" icon={Mars} label="Male" value={s.male} testId="stat-male" />
       <StatCard tone="female" icon={Venus} label="Female" value={s.female} testId="stat-female" />
       <StatCard
@@ -299,8 +287,6 @@ function ByOfficer({ s, onView }: { s: Summary; onView: (id: string) => void }) 
           <tr className="bg-canvas text-left text-xs text-muted">
             <th scope="col" className="py-2.5 pr-3 pl-4 font-semibold md:pl-5">Officer</th>
             <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Present</th>
-            <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Absent</th>
-            <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Total</th>
             <th scope="col" aria-label="Actions" className="pr-2 md:pr-3" />
           </tr>
         </thead>
@@ -308,9 +294,7 @@ function ByOfficer({ s, onView }: { s: Summary; onView: (id: string) => void }) 
           {s.byOfficer.map((o) => (
             <tr key={o.id} className="border-t border-rule">
               <td className="py-1.5 pr-3 pl-4 font-semibold md:pl-5">{o.name}</td>
-              <td className="py-1.5 pr-3 text-right">{o.present}</td>
-              <td className="py-1.5 pr-3 text-right">{o.absent}</td>
-              <td className="py-1.5 pr-3 text-right font-bold">{o.present + o.absent}</td>
+              <td className="py-1.5 pr-3 text-right font-bold">{o.present}</td>
               <td className="py-1 pr-2 text-right md:pr-3">
                 <Button variant="ghost" size="sm" icon={History} aria-label={`View history for ${o.name}`} onClick={() => onView(o.id)}>
                   <span className="hidden sm:inline">History</span>
@@ -323,8 +307,6 @@ function ByOfficer({ s, onView }: { s: Summary; onView: (id: string) => void }) 
           <tr className="border-t-2 border-line bg-canvas font-bold" data-testid="officer-totals">
             <th scope="row" className="py-2.5 pr-3 pl-4 text-left md:pl-5">All officers</th>
             <td className="py-2.5 pr-3 text-right">{s.total}</td>
-            <td className="py-2.5 pr-3 text-right">{s.absent}</td>
-            <td className="py-2.5 pr-3 text-right">{s.records}</td>
             <td />
           </tr>
         </tfoot>
@@ -374,8 +356,7 @@ function DayWise({ s, gender }: { s: Summary; gender: string }) {
                 <th scope="col" className="py-2.5 pr-3 pl-4 font-semibold md:pl-5">Event</th>
                 <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Male</th>
                 <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Female</th>
-                <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Total</th>
-                <th scope="col" className="py-2.5 pr-4 text-right font-semibold md:pr-6">Absent</th>
+                <th scope="col" className="py-2.5 pr-4 text-right font-semibold md:pr-6">Total</th>
                 <th scope="col" aria-label="Chart" className="hidden w-1/2 py-2.5 pr-5 md:table-cell" />
               </tr>
             </thead>
@@ -388,8 +369,7 @@ function DayWise({ s, gender }: { s: Summary; gender: string }) {
                   </td>
                   <td className="py-2.5 pr-3 text-right">{r.male}</td>
                   <td className="py-2.5 pr-3 text-right">{r.female}</td>
-                  <td className="py-2.5 pr-3 text-right font-bold">{r.total}</td>
-                  <td className="py-2.5 pr-4 text-right md:pr-6">{r.absent}</td>
+                  <td className="py-2.5 pr-4 text-right font-bold md:pr-6">{r.total}</td>
                   <td className="hidden py-2.5 pr-5 md:table-cell">
                     <div className="flex gap-0.5" style={{ width: `${(r.total / max) * 100}%` }}>
                       {showMale && r.male > 0 && <BarPart row={r} value={r.male} label="male" className="bg-male" />}
@@ -417,19 +397,18 @@ function BarPart({ row, value, label, className }: { row: DayRow; value: number;
   );
 }
 
-function RecordsTable({ records, onCorrect }: { records: AttendanceRecord[]; onCorrect: (record: AttendanceRecord) => void }) {
+function RecordsTable({ records, onRemove }: { records: AttendanceRecord[]; onRemove: (record: AttendanceRecord) => void }) {
   if (records.length === 0) {
     return <EmptyState icon={UserRoundCheck} titleAs="p" title="No attendance records for these filters" description="They appear here as officers mark people present." />;
   }
 
-  const correct = (r: AttendanceRecord) => (
-    <Button variant="ghost" size="sm" icon={Pencil} onClick={() => onCorrect(r)}>Correct</Button>
+  const remove = (r: AttendanceRecord) => (
+    <Button variant="ghost-danger" size="sm" icon={Trash2} onClick={() => onRemove(r)}>Remove</Button>
   );
 
   const columns: Column<AttendanceRecord>[] = [
     // ID and mobile share a column, so the whole table fits on a laptop without scrolling sideways.
     { key: "name", header: "Name", cell: (r) => <PersonCell name={r.name} gender={r.gender} detail={[r.global_member_id, r.mobile].filter(Boolean).join(" · ")} /> },
-    { key: "status", header: "Status", cell: (r) => <AttendanceBadge status={r.status} /> },
     { key: "gender", header: "Gender", cell: (r) => <GenderBadge gender={r.gender} /> },
     { key: "center", header: "Center", cell: (r) => <span className="text-muted">{r.center}</span> },
     {
@@ -445,7 +424,7 @@ function RecordsTable({ records, onCorrect }: { records: AttendanceRecord[]; onC
     },
     { key: "by", header: "Marked by", cell: (r) => <span className="text-muted">{r.marked_by}</span> },
     { key: "source", header: "Source", cell: (r) => <SourceBadge source={r.created_source} /> },
-    { key: "actions", header: "Actions", hideHeader: true, align: "right", cell: correct },
+    { key: "actions", header: "Actions", hideHeader: true, align: "right", cell: remove },
   ];
 
   return (
@@ -461,7 +440,7 @@ function RecordsTable({ records, onCorrect }: { records: AttendanceRecord[]; onC
             <MetaList
               items={[
                 r.global_member_id ? { icon: Hash, label: r.global_member_id, strong: true } : null,
-                { icon: Phone, label: r.mobile },
+                r.mobile ? { icon: Phone, label: r.mobile } : null,
                 { icon: MapPin, label: r.center },
                 { icon: Clock, label: `${shortEvent(r)}, ${formatDateTime(r.marked_at)}` },
                 { icon: UserRoundCheck, label: r.marked_by },
@@ -470,10 +449,9 @@ function RecordsTable({ records, onCorrect }: { records: AttendanceRecord[]; onC
           }
           footer={
             <>
-              <AttendanceBadge status={r.status} />
               <GenderBadge gender={r.gender} />
               <SourceBadge source={r.created_source} />
-              <span className="ml-auto">{correct(r)}</span>
+              <span className="ml-auto">{remove(r)}</span>
             </>
           }
         />
@@ -482,16 +460,8 @@ function RecordsTable({ records, onCorrect }: { records: AttendanceRecord[]; onC
   );
 }
 
-const CORRECTIONS = {
-  present: { option: "Change to Present", button: "Change to Present", done: "Changed to Present." },
-  absent: { option: "Change to Absent", button: "Change to Absent", done: "Changed to Absent." },
-  remove: { option: "Remove this attendance", button: "Remove Attendance", done: "Attendance removed." },
-} as const;
-
-/** Only Admin ever reaches this. Officers can't undo Present, so every correction comes through here with a reason. */
-function CorrectionForm({ record, onClose, onDone }: { record: AttendanceRecord; onClose: () => void; onDone: (message: string) => void }) {
-  const other = record.status === "present" ? "absent" : "present";
-  const [action, setAction] = useState<keyof typeof CORRECTIONS>(other);
+/** Only Admin reaches this, and every removal needs a reason. Officers can't undo attendance. */
+function RemoveForm({ record, onClose, onDone }: { record: AttendanceRecord; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -500,8 +470,8 @@ function CorrectionForm({ record, onClose, onDone }: { record: AttendanceRecord;
     setBusy(true);
     setError("");
     try {
-      await api(`/api/admin/attendance/${record.id}/correct`, { json: { action, reason } });
-      onDone(CORRECTIONS[action].done);
+      await api(`/api/admin/attendance/${record.id}/cancel`, { json: { reason } });
+      onDone();
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -511,26 +481,15 @@ function CorrectionForm({ record, onClose, onDone }: { record: AttendanceRecord;
   return (
     <div className="flex flex-col gap-4">
       <p>
-        <strong className="font-semibold">{record.name}</strong> is marked <AttendanceBadge status={record.status} /> for <strong className="font-semibold">{record.event_name}</strong>.
+        Remove <strong className="font-semibold">{record.name}</strong> from <strong className="font-semibold">{record.event_name}</strong>? If the event is still active, they can be marked again.
       </p>
-      <Field label="What should change?" htmlFor="correct-action">
-        <Select
-          id="correct-action"
-          value={action}
-          onChange={(v) => setAction(v as keyof typeof CORRECTIONS)}
-          options={[other, "remove"].map((key) => ({ value: key, label: CORRECTIONS[key as keyof typeof CORRECTIONS].option }))}
-        />
-      </Field>
-      {action === "remove" && <p className="text-sm text-muted">If the event is still active, an officer can mark them again.</p>}
-      <Field label="Reason" htmlFor="correct-reason">
-        <TextInput id="correct-reason" autoFocus maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} />
+      <Field label="Reason" htmlFor="remove-reason">
+        <TextInput id="remove-reason" autoFocus maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} />
       </Field>
       {error && <Alert tone="danger" title={error} />}
       <ModalActions>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button variant={action === "remove" ? "danger" : "primary"} loading={busy} disabled={!reason.trim()} onClick={submit}>
-          {busy ? "Saving…" : CORRECTIONS[action].button}
-        </Button>
+        <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={submit}>{busy ? "Removing…" : "Remove Attendance"}</Button>
       </ModalActions>
     </div>
   );

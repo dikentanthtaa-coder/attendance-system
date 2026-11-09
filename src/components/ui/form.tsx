@@ -7,10 +7,10 @@ import { Eye, EyeOff, Search, X, type LucideIcon } from "lucide-react";
 const INPUT =
   "w-full min-h-11 rounded-control border border-control bg-white px-3 text-base text-ink shadow-xs transition-colors duration-150 placeholder:text-muted hover:border-muted focus:border-brand focus:outline-none focus:ring-3 focus:ring-brand/20 disabled:bg-canvas";
 
-export function Field({ label, hint, htmlFor, children }: { label: string; hint?: string; htmlFor?: string; children: ReactNode }) {
+export function Field({ label, hint, htmlFor, labelOnlyForReaders, children }: { label: string; hint?: string; htmlFor?: string; /** On phones, when the field's own value already says what it is. */ labelOnlyForReaders?: boolean; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <label id={htmlFor && `${htmlFor}-label`} htmlFor={htmlFor} className="text-sm font-semibold text-ink">
+      <label id={htmlFor && `${htmlFor}-label`} htmlFor={htmlFor} className={`text-sm font-semibold text-ink ${labelOnlyForReaders ? "max-sm:sr-only" : ""}`}>
         {label}
         {hint && <span className="ml-1 font-normal text-muted">{hint}</span>}
       </label>
@@ -64,7 +64,7 @@ export function SearchInput({
         ref={inputRef}
         type="search"
         value={value}
-        className={`${INPUT} ${large ? "min-h-13 pl-11 text-lg" : "pl-10"} pr-11 ${className}`}
+        className={`${INPUT} ${large ? "min-h-13 pl-10 text-lg max-sm:placeholder:text-xs sm:pl-11 sm:placeholder:text-sm" : "pl-10 placeholder:text-sm"} ${value ? "pr-11" : "pr-2"} ${className}`}
       />
       {value && (
         <button

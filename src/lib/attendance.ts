@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ApiError } from "./api";
 import type { SessionUser } from "./auth";
 import { getSql, isUniqueViolation, withTransaction } from "./db";
-import { normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName, type AttendanceStatus } from "./shared";
+import { normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName } from "./shared";
 
 type Sql = ReturnType<typeof getSql>;
 
@@ -32,12 +32,28 @@ async function requireActiveEvent(tx: Sql, eventDay: number) {
 
 export const eventDaySchema = z.coerce.number().int().min(1).max(3);
 
+/** A person's whole name matches when each typed piece starts a word, in the same order. */
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+}
+
+/**
+ * "jay kan" finds first name Jay..., last name Kan... (with or without a middle name), and
+ * "jay pop kan" adds a middle name Pop.... The first piece must start the first name, so it doesn't
+ * find "Monal Jaytibhai Kanani". One piece alone starts any word, to find someone by surname.
+ */
+export function nameSearchPattern(query: string) {
+  const pieces = query.trim().split(/\s+/).filter(Boolean).slice(0, 5).map(escapeRegex);
+  if (pieces.length === 0) return null;
+  return pieces.length === 1 ? `(^|\\s)${pieces[0]}` : `^${pieces.join(".*\\s")}`;
+}
+
 /** Splits a search box value into safe LIKE patterns. */
 function escapeLike(value: string) {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
-export async function searchMembers(query: string, eventDay: number) {
+export async function searchMembers(user: SessionUser, query: string, eventDay: number, center: string | null = null) {
   const q = query.trim().replace(/\s+/g, " ").slice(0, 80);
   if (!q) return [];
 
@@ -46,28 +62,28 @@ export async function searchMembers(query: string, eventDay: number) {
   const digits = q.replace(/[\s+-]/g, "");
   const mobilePattern = /^\d+$/.test(digits) ? `%${digits}%` : null;
   const mobilePrefix = mobilePattern ? `${digits}%` : null;
-  const tokens = q.toLowerCase().split(" ").filter(Boolean).slice(0, 5).map((t) => `%${escapeLike(t)}%`);
-  const nameStart = `${escapeLike(q.toLowerCase())}%`;
-
-  // "ram pat" matches "Ramesh Patel": every typed piece has to appear in the name.
-  const nameMatch = tokens.reduce((acc, token) => sql`${acc} and m.name ilike ${token}`, sql`true`);
+  const firstName = `^${escapeRegex(q.split(" ")[0])}`;
 
   const rows = await sql`
     select m.id, m.global_member_id, m.name, m.mobile, m.gender, m.center,
-           a.status as attendance_status, a.marked_at, u.display_name as marked_by
+           a.marked_at as present_at, u.display_name as marked_by
     from members m
     left join attendance a
-      on a.member_id = m.id and a.event_day = ${eventDay} and a.status in ('present', 'absent')
+      on a.member_id = m.id and a.event_day = ${eventDay} and a.status = 'present'
     left join app_users u on u.id = a.marked_by
-    where m.global_member_id like ${idPrefix}
-      or (${nameMatch})
-      ${mobilePattern ? sql`or m.mobile like ${mobilePattern}` : sql``}
+    where ${user.genderScope ? sql`m.gender = ${user.genderScope}` : sql`true`}
+      ${center ? sql`and m.center = ${center}` : sql``}
+      and (
+        m.global_member_id like ${idPrefix}
+        or m.name ~* ${nameSearchPattern(q)!}
+        ${mobilePattern ? sql`or m.mobile like ${mobilePattern}` : sql``}
+      )
     order by
       case
         when m.global_member_id = ${q.toUpperCase()} then 0
         when m.global_member_id like ${idPrefix} then 1
         when ${mobilePrefix}::text is not null and m.mobile like ${mobilePrefix}::text then 2
-        when m.name ilike ${nameStart} then 3
+        when m.name ~* ${firstName} then 3
         else 4
       end,
       length(m.global_member_id) nulls last,
@@ -78,56 +94,52 @@ export async function searchMembers(query: string, eventDay: number) {
 }
 
 /**
- * What an officer may do is decided here, in one statement, so two officers tapping at once can't
- * get around it. Nothing yet, or removed by Admin: either status. Absent: can become Present, for
- * someone who arrives late. Present: stays as it is, because only Admin can undo attendance.
+ * One statement decides each mark, so two devices tapping at once can't record it twice.
+ * Present stays as it is: only Admin can remove attendance.
  */
-export async function markAttendance(officer: SessionUser, memberId: number, eventDay: number, status: AttendanceStatus) {
+export async function markAttendance(user: SessionUser, memberId: number, eventDay: number) {
   return withTransaction(async (tx) => {
     await requireActiveEvent(tx, eventDay);
 
-    const [member] = await tx`select id, name from members where id = ${memberId}`;
+    // Filtering by gender here means a member outside the officer's scope simply doesn't exist for them.
+    const [member] = await tx`
+      select id, name from members
+      where id = ${memberId} ${user.genderScope ? tx`and gender = ${user.genderScope}` : tx``}`;
     if (!member) throw new ApiError(404, "member_not_found", "Member not found.");
-
-    const [before] = await tx`select status from attendance where member_id = ${member.id} and event_day = ${eventDay}`;
 
     const [saved] = await tx`
       insert into attendance (member_id, event_day, marked_by, status)
-      values (${member.id}, ${eventDay}, ${officer.id}, ${status})
+      values (${member.id}, ${eventDay}, ${user.id}, 'present')
       on conflict (member_id, event_day) do update
-        set status = excluded.status, marked_at = now(), marked_by = excluded.marked_by,
+        set status = 'present', marked_at = now(), marked_by = excluded.marked_by,
             cancelled_at = null, cancelled_by = null, cancel_reason = null
-        where attendance.status = 'cancelled'
-           or (attendance.status = 'absent' and excluded.status = 'present')
+        where attendance.status <> 'present'
       returning id, marked_at`;
 
     if (!saved) {
       const [existing] = await tx`
-        select a.status, a.marked_at, u.display_name as marked_by
+        select a.marked_at, u.display_name as marked_by
         from attendance a join app_users u on u.id = a.marked_by
         where a.member_id = ${member.id} and a.event_day = ${eventDay}`;
       return {
-        status: existing.status === "present" ? ("already_present" as const) : ("already_absent" as const),
+        status: "already_present" as const,
         memberName: member.name as string,
         markedAt: existing.marked_at as Date,
         markedBy: existing.marked_by as string,
       };
     }
 
-    await writeAudit(tx, officer, "attendance.mark", saved.id, {
+    await writeAudit(tx, user, "attendance.mark", saved.id, {
       member_id: member.id,
       member_name: member.name,
       event_day: eventDay,
-      status,
-      previous_status: before?.status ?? null,
     });
 
     return {
       status: "marked" as const,
-      attendance: status,
       memberName: member.name as string,
       markedAt: saved.marked_at as Date,
-      markedBy: officer.displayName,
+      markedBy: user.displayName,
     };
   });
 }
@@ -136,6 +148,31 @@ export async function markAttendance(officer: SessionUser, memberId: number, eve
 export async function findMobileMatches(sql: Sql, mobile: string) {
   const rows = await sql`select name from members where mobile = ${mobile} order by name limit 5`;
   return rows.map((r) => r.name as string);
+}
+
+/**
+ * Same name and same mobile is the same person, so it can't be added again. Only the mobile matching
+ * is usually family sharing a number, and only the name matching can be two different people, so
+ * those ask the officer to check first. Details are only given for members this account can see.
+ */
+export async function findDuplicates(user: SessionUser, name: string, mobile: string | null, sql: Sql = getSql()) {
+  const scope = user.genderScope ? sql`gender = ${user.genderScope}` : sql`true`;
+  const [exact] = name && mobile
+    ? await sql`select name, gender from members where mobile = ${mobile} and lower(name) = lower(${name}) limit 1`
+    : [];
+  const [mobileMatches, nameMatches] = await Promise.all([
+    mobile ? findMobileMatches(sql, mobile) : [],
+    name
+      ? sql`
+          select name, global_member_id, mobile, center from members
+          where ${scope} and lower(name) = lower(${name}) order by global_member_id nulls last limit 5`
+      : [],
+  ]);
+  return {
+    exact: exact ? { name: !user.genderScope || exact.gender === user.genderScope ? (exact.name as string) : null } : null,
+    mobileMatches,
+    nameMatches: nameMatches.map((m) => ({ name: m.name as string, memberId: m.global_member_id as string | null, mobile: m.mobile as string | null, center: m.center as string })),
+  };
 }
 
 export const quickEntrySchema = z.object({
@@ -150,48 +187,64 @@ export const quickEntrySchema = z.object({
     }
     return mobile;
   }),
-  gender: z.enum(["Male", "Female"], "Please choose a gender."),
+  // Officers can't set this: their account decides it. Only Admin chooses.
+  gender: z.enum(["Male", "Female"], "Please choose a gender.").optional(),
   center: z.string().max(80, "Center name is too long.").transform(normalizeCenter).pipe(z.string().min(1, "Center is required.")),
   confirmDuplicateMobile: z.boolean().optional().default(false),
 });
 
-export async function quickEntry(officer: SessionUser, input: z.output<typeof quickEntrySchema>) {
+export async function quickEntry(user: SessionUser, input: z.output<typeof quickEntrySchema>) {
   const globalId = normalizeMemberId(input.globalMemberId) || null;
+  const gender = user.genderScope ?? input.gender;
+  if (!gender) throw new ApiError(400, "invalid_input", "Please choose a gender.");
 
   try {
     return await withTransaction(async (tx) => {
       await requireActiveEvent(tx, input.eventDay);
 
       if (globalId) {
-        const [taken] = await tx`select name from members where global_member_id = ${globalId}`;
+        const [taken] = await tx`select name, gender from members where global_member_id = ${globalId}`;
         if (taken) {
-          throw new ApiError(409, "member_id_taken", `Member ID ${globalId} already belongs to ${taken.name}. Search for this member instead.`);
+          // Only name the holder if this account is allowed to see that member.
+          throw new ApiError(
+            409,
+            "member_id_taken",
+            !user.genderScope || taken.gender === user.genderScope
+              ? `Member ID ${globalId} already belongs to ${taken.name}. Search for this member instead.`
+              : `Member ID ${globalId} is already in use.`,
+          );
         }
       }
 
+      const found = await findDuplicates(user, input.name, input.mobile, tx);
+      if (found.exact) {
+        throw new ApiError(409, "member_exists", found.exact.name ? `${found.exact.name} already exists with this mobile number. Search for this member instead.` : "A member with this name and mobile number already exists.");
+      }
       if (!input.confirmDuplicateMobile) {
-        const matches = await findMobileMatches(tx, input.mobile);
-        if (matches.length > 0) {
-          throw new ApiError(409, "duplicate_mobile", "Aa mobile number aa member sathe already registered chhe.", { matches });
+        if (found.mobileMatches.length > 0) {
+          throw new ApiError(409, "duplicate_mobile", "Aa mobile number aa member sathe already registered chhe.", { matches: found.mobileMatches });
+        }
+        if (found.nameMatches.length > 0) {
+          throw new ApiError(409, "duplicate_name", "A member with this name is already registered.", { nameMatches: found.nameMatches });
         }
       }
 
       // Always a brand-new row: an existing member with the same number is never touched.
       const [member] = await tx`
         insert into members (global_member_id, name, mobile, gender, center, created_source, created_by, created_event_day)
-        values (${globalId}, ${input.name}, ${input.mobile}, ${input.gender}, ${input.center},
-                'quick_entry', ${officer.id}, ${input.eventDay})
+        values (${globalId}, ${input.name}, ${input.mobile}, ${gender}, ${input.center},
+                'quick_entry', ${user.id}, ${input.eventDay})
         returning id, name`;
 
       const [attendance] = await tx`
         insert into attendance (member_id, event_day, marked_by)
-        values (${member.id}, ${input.eventDay}, ${officer.id})
+        values (${member.id}, ${input.eventDay}, ${user.id})
         returning id, marked_at`;
 
-      await writeAudit(tx, officer, "member.quick_entry", member.id, {
+      await writeAudit(tx, user, "member.quick_entry", member.id, {
         name: member.name,
         mobile: input.mobile,
-        gender: input.gender,
+        gender,
         center: input.center,
         global_member_id: globalId,
         event_day: input.eventDay,
@@ -211,13 +264,16 @@ export async function quickEntry(officer: SessionUser, input: z.output<typeof qu
 
 const HISTORY_PAGE_SIZE = 50;
 
-/** Who was marked on a day, newest first. Attendance Admin has removed doesn't appear. */
-export async function listHistory(officer: SessionUser, eventDay: number, scope: "mine" | "all", page: number) {
+/** Who was marked on a day, newest first. Officers see their own gender; Admin can see everyone. */
+export async function listHistory(user: SessionUser, eventDay: number, scope: "mine" | "all", page: number) {
   const sql = getSql();
-  const where = sql`a.event_day = ${eventDay} and a.status in ('present', 'absent') ${scope === "mine" ? sql`and a.marked_by = ${officer.id}` : sql``}`;
+  const limit = user.genderScope
+    ? sql`and m.gender = ${user.genderScope}`
+    : scope === "mine" ? sql`and a.marked_by = ${user.id}` : sql``;
+  const where = sql`a.event_day = ${eventDay} and a.status = 'present' ${limit}`;
   const [records, [{ total }]] = await Promise.all([
     sql`
-      select a.id, a.status, a.marked_at, u.display_name as marked_by, a.marked_by = ${officer.id} as is_mine,
+      select a.id, a.marked_at, u.display_name as marked_by, a.marked_by = ${user.id} as is_mine,
              m.global_member_id, m.name, m.mobile, m.gender, m.center
       from attendance a
       join members m on m.id = a.member_id
@@ -225,48 +281,52 @@ export async function listHistory(officer: SessionUser, eventDay: number, scope:
       where ${where}
       order by a.marked_at desc, a.id desc
       limit ${HISTORY_PAGE_SIZE} offset ${(page - 1) * HISTORY_PAGE_SIZE}`,
-    sql`select count(*)::int as total from attendance a where ${where}`,
+    sql`select count(*)::int as total from attendance a join members m on m.id = a.member_id where ${where}`,
   ]);
   return { records, total, pageSize: HISTORY_PAGE_SIZE };
 }
 
 const UNMARKED_PAGE_SIZE = 10;
 
-/** Members with no Present or Absent yet on this day: the people still to be marked. */
-export async function listUnmarked(eventDay: number, page: number) {
+/** The value of an Area filter: nothing chosen means every area. */
+export const centerFilter = (value: string | null) => (value && value !== "all" ? value.slice(0, 80) : null);
+
+/** Members not yet marked Present on this day: the people still to be marked. */
+export async function listUnmarked(user: SessionUser, eventDay: number, page: number, center: string | null = null) {
   const sql = getSql();
-  const where = sql`not exists (
+  const scope = user.genderScope ? sql`m.gender = ${user.genderScope}` : sql`true`;
+  const where = sql`${scope} ${center ? sql`and m.center = ${center}` : sql``} and not exists (
     select 1 from attendance a
-    where a.member_id = m.id and a.event_day = ${eventDay} and a.status in ('present', 'absent'))`;
-  const [members, [{ total }]] = await Promise.all([
+    where a.member_id = m.id and a.event_day = ${eventDay} and a.status = 'present')`;
+  const [members, [{ total }], centers] = await Promise.all([
     sql`
       select m.id, m.global_member_id, m.name, m.mobile, m.gender, m.center,
-             null::text as attendance_status, null::timestamptz as marked_at, null::text as marked_by
+             null::timestamptz as present_at, null::text as marked_by
       from members m where ${where}
       order by m.name, m.id
       limit ${UNMARKED_PAGE_SIZE} offset ${(page - 1) * UNMARKED_PAGE_SIZE}`,
     sql`select count(*)::int as total from members m where ${where}`,
+    // Only areas this account has members in. An area appears here as soon as an upload adds it.
+    sql`select distinct m.center from members m where ${scope} order by m.center`,
   ]);
-  return { members, total, pageSize: UNMARKED_PAGE_SIZE };
+  return { members, total, pageSize: UNMARKED_PAGE_SIZE, centers: centers.map((c) => c.center as string) };
 }
 
-/** Each day's totals, and this person's own part of them. */
+/** Each day's total, and this account's own part of it. */
 export async function listDayCounts(user: Pick<SessionUser, "id">) {
   const rows = await getSql()`
     select event_day,
            count(*) filter (where status = 'present')::int as present,
-           count(*) filter (where status = 'absent')::int as absent,
-           count(*) filter (where status = 'present' and marked_by = ${user.id})::int as my_present,
-           count(*) filter (where status = 'absent' and marked_by = ${user.id})::int as my_absent
+           count(*) filter (where status = 'present' and marked_by = ${user.id})::int as my_present
     from attendance group by event_day`;
-  return Object.fromEntries(rows.map((c) => [c.event_day, { present: c.present, absent: c.absent, myPresent: c.my_present, myAbsent: c.my_absent }]));
+  return Object.fromEntries(rows.map((c) => [c.event_day, { present: c.present, myPresent: c.my_present }]));
 }
 
 /** Everything the marking screen shows first, so it arrives with the page, not after it. */
 export async function getDeskData(user: SessionUser) {
   const events = await listEvents();
   const day = events.find((e) => e.status === "active")?.event_day ?? 1;
-  const [counts, history, unmarked] = await Promise.all([listDayCounts(user), listHistory(user, day, "mine", 1), listUnmarked(day, 1)]);
+  const [counts, history, unmarked] = await Promise.all([listDayCounts(user), listHistory(user, day, "mine", 1), listUnmarked(user, day, 1)]);
   return JSON.parse(JSON.stringify({ events, counts, day, history, unmarked }));
 }
 

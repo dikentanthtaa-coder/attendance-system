@@ -1,4 +1,5 @@
 import "server-only";
+import { nameSearchPattern } from "./attendance";
 import { getSql } from "./db";
 
 const PAGE_SIZE = 50;
@@ -7,10 +8,9 @@ export async function listMembers(query: string, page: number) {
   const q = query.trim().replace(/[\\%_]/g, "\\$&");
   const sql = getSql();
 
-  const tokens = q.split(/\s+/).filter(Boolean).slice(0, 5);
-  const nameMatch = tokens.reduce((acc, t) => sql`${acc} and m.name ilike ${`%${t}%`}`, sql`true`);
-  const where = q
-    ? sql`(m.global_member_id ilike ${`${q}%`} or m.mobile like ${`%${q}%`} or (${nameMatch}))`
+  const pattern = nameSearchPattern(query);
+  const where = pattern
+    ? sql`(m.global_member_id ilike ${`${q}%`} or m.mobile like ${`%${q}%`} or m.name ~* ${pattern})`
     : sql`true`;
 
   const [members, [{ total }]] = await Promise.all([

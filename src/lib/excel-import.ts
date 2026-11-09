@@ -40,7 +40,7 @@ type ValidRow = {
   row: number;
   id: string | null;
   name: string;
-  mobile: string;
+  mobile: string | null;
   gender: Gender;
   center: string;
 };
@@ -56,6 +56,8 @@ export function cellText(value: ExcelJS.CellValue): string {
   if ("text" in value) return cellText(value.text as ExcelJS.CellValue);
   return "";
 }
+
+const GENDERS: Record<string, Gender> = { m: "Male", male: "Male", f: "Female", female: "Female" };
 
 const headerKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -112,13 +114,12 @@ export async function parseWorkbook(buffer: ArrayBuffer) {
     if (name.length > 120) rowErrors.push("Name is too long");
     if (id && id.length > 50) rowErrors.push("MemberID is too long");
 
-    const mobile = normalizeMobile(rawMobile);
-    if (!rawMobile) rowErrors.push("Mo.no. is missing");
-    else if (!mobile) rowErrors.push(`Mo.no. "${rawMobile}" is not a valid 10-digit number`);
+    // A blank number is fine, as not everyone has one on record. A wrong one is a typing mistake to fix.
+    const mobile = rawMobile ? normalizeMobile(rawMobile) : null;
+    if (rawMobile && !mobile) rowErrors.push(`Mo.no. "${rawMobile}" is not a valid 10-digit number`);
 
-    const genderLower = rawGender.toLowerCase();
-    const gender: Gender | null = genderLower === "male" ? "Male" : genderLower === "female" ? "Female" : null;
-    if (!gender) rowErrors.push(rawGender ? `Gender "${rawGender}" must be Male or Female` : "Gender is missing");
+    const gender = GENDERS[rawGender.toLowerCase()] ?? null;
+    if (!gender) rowErrors.push(rawGender ? `Gender "${rawGender}" must be M, F, Male or Female` : "Gender is missing");
 
     const center = normalizeCenter(rawCenter);
     if (!center) rowErrors.push("Center is missing");
@@ -129,8 +130,8 @@ export async function parseWorkbook(buffer: ArrayBuffer) {
       const firstRow = seenIds.get(id);
       if (firstRow) rowErrors.push(`MemberID ${id} is repeated (first seen on row ${firstRow})`);
       else if (rowErrors.length === 0) seenIds.set(id, rowNumber);
-    } else if (mobile && gender && name) {
-      const key = `${name.toLowerCase()}|${mobile}|${gender}`;
+    } else if (gender && name && (mobile || !rawMobile)) {
+      const key = `${name.toLowerCase()}|${mobile ?? ""}|${gender}`;
       const firstRow = seenNoId.get(key);
       if (firstRow) rowErrors.push(`Same member is repeated (first seen on row ${firstRow})`);
       else if (rowErrors.length === 0) seenNoId.set(key, rowNumber);
@@ -139,7 +140,7 @@ export async function parseWorkbook(buffer: ArrayBuffer) {
     if (rowErrors.length > 0) {
       errors.push({ row: rowNumber, memberId: rawId, name: rawName, errors: rowErrors });
     } else {
-      valid.push({ row: rowNumber, id, name, mobile: mobile!, gender: gender!, center });
+      valid.push({ row: rowNumber, id, name, mobile, gender: gender!, center });
     }
   });
 
@@ -170,7 +171,7 @@ export async function importMembers(admin: SessionUser, fileName: string, buffer
         pick as (
           select distinct on (t.id) t.id as new_id, m.id as member_id
           from t join members m
-            on m.global_member_id is null and m.mobile = t.mobile
+            on m.global_member_id is null and m.mobile is not distinct from t.mobile
            and m.gender = t.gender and lower(m.name) = lower(t.name)
           order by t.id, m.id
         ),
@@ -185,7 +186,8 @@ export async function importMembers(admin: SessionUser, fileName: string, buffer
         select t.id, t.name, t.mobile, t.gender, t.center, 'excel_import', ${admin.id}
         from jsonb_to_recordset(${rows}) as t(id text, name text, mobile text, gender text, center text)
         on conflict (global_member_id) where global_member_id is not null do update
-          set name = excluded.name, mobile = excluded.mobile, gender = excluded.gender,
+          -- A blank in a later file doesn't erase a number already on record.
+          set name = excluded.name, mobile = coalesce(excluded.mobile, members.mobile), gender = excluded.gender,
               center = excluded.center, updated_at = now()
         returning (xmax = 0) as inserted`;
       for (const r of result) {
@@ -197,7 +199,8 @@ export async function importMembers(admin: SessionUser, fileName: string, buffer
     if (withoutId.length > 0) {
       const rows = tx.json(withoutId as never);
 
-      // No MemberID to match on, so re-uploading the same file matches on name + mobile + gender.
+      // No MemberID to match on, so re-uploading the same file matches on name + mobile + gender,
+      // treating two blank mobiles as the same. Otherwise every re-upload would add these people again.
       const matched = await tx`
         with t as (
           select * from jsonb_to_recordset(${rows}) as x(name text, mobile text, gender text, center text)
@@ -205,7 +208,7 @@ export async function importMembers(admin: SessionUser, fileName: string, buffer
         pick as (
           select distinct on (t.name, t.mobile, t.gender) m.id, t.center
           from t join members m
-            on m.mobile = t.mobile and m.gender = t.gender and lower(m.name) = lower(t.name)
+            on m.mobile is not distinct from t.mobile and m.gender = t.gender and lower(m.name) = lower(t.name)
           order by t.name, t.mobile, t.gender, m.id
         )
         update members m set center = p.center, updated_at = now()
@@ -219,7 +222,7 @@ export async function importMembers(admin: SessionUser, fileName: string, buffer
         from jsonb_to_recordset(${rows}) as t(name text, mobile text, gender text, center text)
         where not exists (
           select 1 from members m
-          where m.mobile = t.mobile and m.gender = t.gender and lower(m.name) = lower(t.name)
+          where m.mobile is not distinct from t.mobile and m.gender = t.gender and lower(m.name) = lower(t.name)
         )
         returning id`;
       imported += inserted.count;

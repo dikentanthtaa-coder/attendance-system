@@ -26,7 +26,7 @@ export function LoginForm() {
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
-      <Field label="Email, Mobile or Username" htmlFor="username">
+      <Field label="Username" htmlFor="username">
         <TextInput
           id="username"
           icon={UserRound}

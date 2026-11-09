@@ -50,7 +50,7 @@ export function EventControls({ initialEvents }: { initialEvents: EventSession[]
         json: { action: pending.action },
       });
       setEvents(data.events);
-      toast("success", `${pending.event.name}: ${pending.action === "end" ? "ended" : "started"}`);
+      toast("success", pending.action === "end" ? `${pending.event.name} ended. Its P and A are ready in Report.` : `${pending.event.name}: started`);
     } catch (err) {
       toast("error", (err as Error).message);
       api<{ events: EventSession[] }>("/api/events").then((d) => setEvents(d.events)).catch(() => {});

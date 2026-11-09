@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
 import { CalendarDays, CircleCheck, Search, type LucideIcon } from "lucide-react";
-import { Card, Logo } from "@/components/ui";
+import { Card, InstallButton, Logo } from "@/components/ui";
 
 const FEATURES: { icon: LucideIcon; text: string }[] = [
   { icon: Search, text: "Find a member by ID, name or mobile" },
-  { icon: CircleCheck, text: "Mark them present or absent in one tap" },
+  { icon: CircleCheck, text: "Mark them present in one tap" },
   { icon: CalendarDays, text: "Live counts across all three days" },
 ];
 
@@ -12,7 +12,7 @@ const FEATURES: { icon: LucideIcon; text: string }[] = [
 export function AuthFrame({ children }: { children: ReactNode }) {
   return (
     <main className="flex flex-1 flex-col lg:flex-row">
-      <div className="bg-brand-deep px-6 pt-10 pb-20 text-white lg:flex lg:w-1/2 lg:items-center lg:justify-center lg:p-16">
+      <div className="bg-brand-deep px-6 pt-[calc(env(safe-area-inset-top)+2.5rem)] pb-20 text-white lg:flex lg:w-1/2 lg:items-center lg:justify-center lg:p-16">
         <div className="mx-auto w-full max-w-md lg:mx-0">
           <Logo className="size-12" />
           <h1 className="mt-4 text-3xl font-bold tracking-tight lg:text-4xl">Gyansatr Attendance</h1>
@@ -29,7 +29,10 @@ export function AuthFrame({ children }: { children: ReactNode }) {
       </div>
 
       <div className="flex flex-1 items-start justify-center px-4 pb-10 lg:items-center lg:p-10">
-        <Card className="-mt-12 w-full max-w-md p-6 lg:mt-0">{children}</Card>
+        <div className="-mt-12 flex w-full max-w-md flex-col items-center gap-2 lg:mt-0">
+          <Card className="w-full p-6">{children}</Card>
+          <InstallButton />
+        </div>
       </div>
     </main>
   );

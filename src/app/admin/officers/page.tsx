@@ -4,5 +4,5 @@ import { OfficersAdmin } from "./officers-admin";
 
 export default async function OfficersPage() {
   await requirePageRole("admin");
-  return <OfficersAdmin initial={JSON.parse(JSON.stringify(await listOfficers("", "all", 1)))} />;
+  return <OfficersAdmin initial={JSON.parse(JSON.stringify(await listOfficers()))} />;
 }

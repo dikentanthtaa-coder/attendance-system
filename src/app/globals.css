@@ -92,6 +92,20 @@
     cursor: not-allowed;
   }
 
+  /* Feels like an app on a phone: no 300ms tap delay or double-tap zoom on controls, and no grey flash. */
+  button,
+  a,
+  input,
+  select,
+  label {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
   /* SearchInput has its own clear button. */
   input[type="search"]::-webkit-search-cancel-button {
     display: none;

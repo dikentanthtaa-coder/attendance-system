@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { LogOut, type LucideIcon } from "lucide-react";
 import { Button } from "./button";
+import { InstallButton } from "./pwa";
 
 /** The app's mark: three strokes for the three days. */
 export function Logo({ className = "size-9" }: { className?: string }) {
@@ -36,48 +37,57 @@ function LogoutButton() {
   );
 }
 
-export type NavLink = { href: string; label: string; icon: LucideIcon };
+/** `short` is shown on phones, where the full label wouldn't fit beside the others. */
+export type NavLink = { href: string; label: string; short?: string; icon: LucideIcon };
 
-const WIDTHS = { wide: "max-w-[1280px]", narrow: "max-w-2xl" } as const;
+const WIDTH = "max-w-[1600px]";
 
 /** The frame every signed-in screen sits in, so all roles share one header and one page width. */
 export function AppShell({
   subtitle,
+  subtitleMore,
   links,
-  width = "wide",
   children,
 }: {
   subtitle: string;
+  /** Left out on small phones, where it would be cut off. */
+  subtitleMore?: string;
   links?: NavLink[];
-  width?: keyof typeof WIDTHS;
   children: ReactNode;
 }) {
   const pathname = usePathname();
   return (
     <div className="flex flex-1 flex-col">
-      <header className="bg-brand-deep text-white shadow-md md:sticky md:top-0 md:z-30">
-        <div className={`mx-auto flex w-full flex-wrap items-center gap-x-6 gap-y-1 px-4 py-2 md:px-6 ${WIDTHS[width]}`}>
-          <div className="flex min-w-0 flex-1 items-center gap-3 md:flex-none">
+      <header className="bg-brand-deep pt-[env(safe-area-inset-top)] text-white shadow-md md:sticky md:top-0 md:z-30">
+        <div className={`mx-auto flex w-full flex-wrap items-center gap-x-6 gap-y-1 px-4 py-2 md:px-6 ${WIDTH}`}>
+          <div className={`flex min-w-0 flex-1 items-center gap-3 ${links ? "lg:flex-none" : ""}`}>
             <Logo />
             <div className="min-w-0">
-              <p className="truncate text-base leading-tight font-bold">Gyansatr Attendance</p>
-              <p className="truncate text-xs text-white/85">{subtitle}</p>
+              <p className="truncate text-sm leading-tight font-bold sm:text-base">Gyansatr Attendance</p>
+              <p className="truncate text-xs text-white/85">
+                {subtitle}
+                {subtitleMore && <span className="max-sm:hidden"> · {subtitleMore}</span>}
+              </p>
             </div>
           </div>
-          <div className="md:order-last"><LogoutButton /></div>
+          <div className="flex items-center gap-1 lg:order-last">
+            <InstallButton variant="on-dark" className="px-3" />
+            <LogoutButton />
+          </div>
           {links && (
-            <nav aria-label="Admin" className="grid w-full grid-cols-2 gap-1 sm:flex md:w-auto md:flex-1">
-              {links.map(({ href, label, icon: Icon }) => {
+            <nav aria-label="Admin" className="grid w-full grid-cols-3 gap-1 sm:flex lg:w-auto lg:flex-1">
+              {links.map(({ href, label, short, icon: Icon }) => {
                 const current = pathname === href;
                 return (
                   <Link
                     key={href}
                     href={href}
                     aria-current={current ? "page" : undefined}
-                    className={`flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-control px-2 text-sm font-semibold whitespace-nowrap transition-colors duration-150 sm:px-4 md:flex-none ${current ? "bg-white text-brand-dark" : "text-white hover:bg-white/15"}`}
+                    className={`flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-control px-2 text-sm font-semibold whitespace-nowrap transition-colors duration-150 sm:px-4 lg:flex-none ${current ? "bg-white text-brand-dark" : "text-white hover:bg-white/15"}`}
                   >
                     <Icon aria-hidden size={16} className="hidden shrink-0 sm:block" />
-                    {label}
+                    <span className={short ? "max-sm:hidden" : ""}>{label}</span>
+                    {short && <span className="sm:hidden">{short}</span>}
                   </Link>
                 );
               })}
@@ -85,7 +95,7 @@ export function AppShell({
           )}
         </div>
       </header>
-      <main className={`mx-auto flex w-full flex-1 flex-col gap-5 px-4 pt-5 pb-10 md:px-6 ${WIDTHS[width]}`}>{children}</main>
+      <main className={`mx-auto flex w-full flex-1 flex-col gap-5 px-4 pt-5 pb-10 md:px-6 ${WIDTH}`}>{children}</main>
     </div>
   );
 }

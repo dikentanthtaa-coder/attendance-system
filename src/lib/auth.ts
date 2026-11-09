@@ -5,13 +5,15 @@ import { redirect } from "next/navigation";
 import bcrypt from "bcryptjs";
 import { jwtVerify, SignJWT } from "jose";
 import { getSql } from "./db";
-import { normalizeMobile } from "./shared";
+import type { Gender } from "./shared";
 
 export type SessionUser = {
   id: string;
   username: string;
   displayName: string;
   role: "admin" | "officer";
+  /** The only members an officer account can reach. Admin has none, and reaches everyone. */
+  genderScope: Gender | null;
   mustChangePassword: boolean;
   /** Raised when a password changes, which signs out every session issued before it. */
   sessionVersion: number;
@@ -33,21 +35,17 @@ function secret() {
 
 export type LoginResult =
   | { ok: true; user: SessionUser }
-  | { ok: false; reason: "invalid" | "locked" | "pending" | "rejected" };
+  | { ok: false; reason: "invalid" | "locked" };
 
-/** Admin logs in with a username; an officer with their email or mobile number. */
-export async function verifyLogin(identifierRaw: string, password: string): Promise<LoginResult> {
+export async function verifyLogin(usernameRaw: string, password: string): Promise<LoginResult> {
   const sql = getSql();
-  const identifier = identifierRaw.trim().toLowerCase();
-  const mobile = normalizeMobile(identifier);
+  const username = usernameRaw.trim().toLowerCase();
 
   const [row] = await sql`
-    select id, username, display_name, password_hash, role, is_active, approval_status,
+    select id, username, display_name, password_hash, role, is_active, gender_scope,
            must_change_password, session_version,
            locked_until is not null and locked_until > now() as locked
-    from app_users
-    where username = ${identifier} or email = ${identifier} ${mobile ? sql`or mobile = ${mobile}` : sql``}
-    limit 1`;
+    from app_users where username = ${username}`;
 
   if (!row) {
     await bcrypt.compare(password, DUMMY_HASH);
@@ -67,8 +65,6 @@ export async function verifyLogin(identifierRaw: string, password: string): Prom
   }
 
   await sql`update app_users set failed_attempts = 0, locked_until = null where id = ${row.id}`;
-  // Only said after the right password, so this can't be used to look up who has registered.
-  if (row.approval_status !== "approved") return { ok: false, reason: row.approval_status };
   return {
     ok: true,
     user: {
@@ -76,6 +72,7 @@ export async function verifyLogin(identifierRaw: string, password: string): Prom
       username: row.username,
       displayName: row.display_name,
       role: row.role,
+      genderScope: row.gender_scope,
       mustChangePassword: row.must_change_password,
       sessionVersion: row.session_version,
     },
@@ -104,9 +101,9 @@ export async function endSession() {
 }
 
 /**
- * The cookie only proves identity. Role, approval and active status are always read from
- * the database, so a permission can't be claimed from the browser, and Admin removing an
- * officer takes effect on that officer's next request.
+ * The cookie only proves identity. Role, gender scope and active status are always read from
+ * the database, so a permission can't be claimed from the browser. Each device has its own
+ * cookie, and logging in or out on one doesn't affect the others.
  */
 export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   const token = (await cookies()).get(COOKIE)?.value;
@@ -124,8 +121,8 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   if (!userId) return null;
 
   const [row] = await getSql()`
-    select id, username, display_name, role, must_change_password, session_version
-    from app_users where id = ${userId} and is_active and approval_status = 'approved'`;
+    select id, username, display_name, role, gender_scope, must_change_password, session_version
+    from app_users where id = ${userId} and is_active`;
   if (!row || row.session_version !== sessionVersion) return null;
 
   return {
@@ -133,6 +130,7 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     username: row.username,
     displayName: row.display_name,
     role: row.role,
+    genderScope: row.gender_scope,
     mustChangePassword: row.must_change_password,
     sessionVersion: row.session_version,
   };

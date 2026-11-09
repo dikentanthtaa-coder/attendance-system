@@ -47,7 +47,7 @@ type Member = {
   id: number;
   global_member_id: string | null;
   name: string;
-  mobile: string;
+  mobile: string | null;
   gender: Gender;
   center: string;
   created_source: MemberSource;
@@ -116,7 +116,7 @@ function UploadCard({ onImported }: { onImported: () => void }) {
 
   return (
     <Card aria-label="Excel upload">
-      <CardHeader title="Upload member Excel" description="Uploading a MemberID that already exists updates that member." />
+      <CardHeader title="Upload member Excel" description="Gender can be M, F, Male or Female. Mo.no. can be blank. Uploading a MemberID that already exists updates that member." />
       <div className="flex flex-col gap-4 p-4 md:p-5">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="mr-1 text-sm font-semibold">First row must have:</span>
@@ -230,7 +230,7 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
   const columns: Column<Member>[] = [
     { key: "name", header: "Name", cell: (m) => <PersonCell name={m.name} gender={m.gender} /> },
     { key: "id", header: "Member ID", nowrap: true, cell: (m) => m.global_member_id ?? <span className="text-muted">—</span> },
-    { key: "mobile", header: "Mobile", nowrap: true, cell: (m) => <span className="text-muted">{m.mobile}</span> },
+    { key: "mobile", header: "Mobile", nowrap: true, cell: (m) => <span className="text-muted">{m.mobile ?? "—"}</span> },
     { key: "gender", header: "Gender", cell: (m) => <GenderBadge gender={m.gender} /> },
     { key: "center", header: "Center", cell: (m) => <span className="text-muted">{m.center}</span> },
     { key: "source", header: "Source", cell: (m) => <SourceBadge source={m.created_source} /> },
@@ -290,7 +290,7 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
                 <MetaList
                   items={[
                     m.global_member_id ? { icon: Hash, label: m.global_member_id, strong: true } : null,
-                    { icon: Phone, label: m.mobile },
+                    m.mobile ? { icon: Phone, label: m.mobile } : null,
                     { icon: MapPin, label: m.center },
                     { icon: CalendarCheck, label: `Present ${m.attendance_count} of 3 days` },
                   ]}
@@ -357,7 +357,7 @@ function EditForm({ member, onClose, onSaved }: { member: Member; onClose: () =>
   const [form, setForm] = useState({
     globalMemberId: member.global_member_id ?? "",
     name: member.name,
-    mobile: member.mobile,
+    mobile: member.mobile ?? "",
     gender: member.gender as string,
   });
   const [center, setCenter] = useState(() => centerValue(member.center));
@@ -384,8 +384,8 @@ function EditForm({ member, onClose, onSaved }: { member: Member; onClose: () =>
       <Field label="Name" htmlFor="edit-name">
         <TextInput id="edit-name" required maxLength={120} value={form.name} onChange={set("name")} />
       </Field>
-      <Field label="Mobile Number" htmlFor="edit-mobile">
-        <TextInput id="edit-mobile" required type="tel" value={form.mobile} onChange={set("mobile")} />
+      <Field label="Mobile Number" hint="(optional)" htmlFor="edit-mobile">
+        <TextInput id="edit-mobile" type="tel" value={form.mobile} onChange={set("mobile")} />
       </Field>
       <Field label="Gender" htmlFor="edit-gender">
         <Select id="edit-gender" value={form.gender} onChange={(gender) => setForm((f) => ({ ...f, gender }))} options={GENDER_OPTIONS} />

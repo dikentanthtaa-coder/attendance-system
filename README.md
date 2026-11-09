@@ -1,21 +1,30 @@
 # Gyansatr Attendance
 
-Attendance management for the three-day Gyansatr event: Admin controls the event days and approves officers, and Attendance Officers search for members and mark them Present or Absent.
+Attendance management for the three-day Gyansatr event: Admin controls the event days, and the Male and Female Officers search for members and mark them present.
 
 Built with Next.js, Postgres on Supabase, and Vercel hosting.
 
 ## Accounts
 
-| Role | How they get an account | Access |
+There are exactly three accounts, and no signup. `npm run seed` creates them:
+
+| Role | Username | Access |
 | --- | --- | --- |
-| Admin | `npm run seed` (username `admin`) | Excel upload, event start and end, approving officers, marking attendance, dashboard, reports, export, corrections |
-| Attendance Officer | Registers at `/register`, then Admin approves on the Officers page | See who isn't marked yet, search all members, mark Present or Absent, Quick Entry, their own totals and everyone's, and a history of each day's marks |
+| Admin | `admin` | Excel upload, event start and end, marking anyone, dashboard, P/A report, export, removing attendance, resetting officer passwords |
+| Male Officer | `male.officer` | Male members only: search, filter by area, mark present, Quick Entry, totals and history |
+| Female Officer | `female.officer` | Female members only: search, filter by area, mark present, Quick Entry, totals and history |
 
-Officers log in with their email or mobile number. Until Admin approves them they can't log in, and Admin can remove access at any time.
+Each account can be logged in on many devices at once. Logging in or out on one doesn't affect the others.
 
-If an officer forgets their password, Admin uses **Reset password** on the Officers page. It shows a temporary password once, signs out any device they're logged in on, and makes them choose a new password at their next login.
+Passwords are randomly generated and saved to `.credentials.local.txt`, which is git-ignored. To issue new ones, run `npm run seed -- --reset`, or use **Reset password** on the Officers page, which logs out every device on that account.
 
-The Admin password is randomly generated and saved to `.credentials.local.txt`, which is git-ignored. To issue a new one, run `npm run seed -- --reset`.
+## The P/A report
+
+Admin's **Report** tab has one row per member and one column per day that has started, and downloads as Excel. P means marked present. A means not marked once that day has ended, worked out when the report runs and never stored. A running day shows `-` for people not marked yet. Columns build up from Day 1, to Days 1 and 2, to all three.
+
+## Installing on a phone
+
+The app is a PWA. On Android or desktop Chrome, use **Install app** in the header. On iPhone, use Safari's **Share → Add to Home Screen**. It needs the internet to work, and says so clearly when it's offline. Only code, icons and the offline page are stored on the device, never member details.
 
 ## Setup
 
@@ -41,14 +50,16 @@ Schema changes go in a new file in `db/migrations/`. Apply them with `npm run mi
 
 Everything below is checked on the server or in the database, so it holds even for forged requests.
 
-- **Officer approval:** role and approval status are read from the database on every request, so removing access takes effect on the officer's next click, and nothing sent while registering can grant access.
+- **Gender restriction:** the officer's gender is read from the database on every request and is never taken from the browser.
+- **No duplicate people in Quick Entry:** the same name and mobile together is refused outright. Only one of them matching asks the officer to confirm, because families share numbers and people share names.
+- **Three accounts only:** there's no signup, and a database index allows one active officer per gender.
 - **Password resets:** a temporary password is stored only as a hash and never logged. Until it's replaced, the server refuses every other request from that account. Each password change raises a version stored with the account and in the session cookie, which signs out older sessions.
-- **Officers can't undo attendance:** one database statement decides each mark. An officer can mark someone with no record, or change Absent to Present. Present stays as it is, even for a forged request, and only Admin's correction route can change or remove it.
+- **Officers can't undo attendance:** one database statement decides each mark, so it holds across devices and forged requests. Only Admin can remove attendance, with a reason.
 - **One active event:** a partial unique index on `event_sessions`.
 - **No duplicate attendance:** a unique constraint on member and event day.
 - **Marking stops when an event ends:** each mark takes a row lock on the event inside its transaction, so a mark can't slip through as Admin ends the event.
 - **Public API closed:** row level security is on with no policies, so Supabase's public API can't read any table.
-- **Audit trail:** registrations, approvals, uploads, event changes, marks, Quick Entries and corrections are written to `audit_log`, in the same transaction as the change. The app has no screen for it; read it in the Supabase table editor.
+- **Audit trail:** uploads, event changes, marks, Quick Entries and corrections are written to `audit_log`, in the same transaction as the change. The app has no screen for it; read it in the Supabase table editor.
 
 ## Tests
 
