@@ -1,20 +1,19 @@
 # Gyansatr Attendance
 
-Attendance management for the three-day Gyansatr event: Admin controls the event days, and the Male and Female Attendance Officers search for members and mark them present.
+Attendance management for the three-day Gyansatr event: Admin controls the event days and approves officers, and Attendance Officers search for members and mark them Present or Absent.
 
 Built with Next.js, Postgres on Supabase, and Vercel hosting.
 
 ## Accounts
 
-There is no signup. `npm run seed` creates the three accounts:
-
-| Role | Username | Access |
+| Role | How they get an account | Access |
 | --- | --- | --- |
-| Admin | `admin` | Excel upload, event start/end, dashboard, reports, export, corrections |
-| Male Officer | `male.officer` | Male members only: search, mark attendance, Quick Entry |
-| Female Officer | `female.officer` | Female members only: search, mark attendance, Quick Entry |
+| Admin | `npm run seed` (username `admin`) | Excel upload, event start and end, approving officers, dashboard, reports, export, corrections |
+| Attendance Officer | Registers at `/register`, then Admin approves on the Officers page | Search all members, mark Present or Absent, Quick Entry |
 
-Passwords are randomly generated and saved to `.credentials.local.txt`, which is git-ignored. To issue new ones, run `npm run seed -- --reset`.
+Officers log in with their email or mobile number. Until Admin approves them they can't log in, and Admin can remove access at any time.
+
+The Admin password is randomly generated and saved to `.credentials.local.txt`, which is git-ignored. To issue a new one, run `npm run seed -- --reset`.
 
 ## Setup
 
@@ -34,18 +33,19 @@ Passwords are randomly generated and saved to `.credentials.local.txt`, which is
 
 The app runs on Vercel and needs `DATABASE_URL` and `SESSION_SECRET` set as environment variables. `vercel.json` pins the server to Singapore (`sin1`), next to the Supabase database, which keeps search fast.
 
-Schema changes go in a new file in `db/migrations/`. Apply them with `npm run migrate`; Vercel deployments don't run migrations.
+Schema changes go in a new file in `db/migrations/`. Apply them with `npm run migrate`; Vercel deployments don't run migrations, so apply them when you push code that needs them.
 
 ## How the rules are enforced
 
 Everything below is checked on the server or in the database, so it holds even for forged requests.
 
-- **Gender restriction:** the officer's gender is read from the database on every request and is never taken from the browser.
+- **Officer approval:** role and approval status are read from the database on every request, so removing access takes effect on the officer's next click, and nothing sent while registering can grant access.
+- **Officers can't undo attendance:** one database statement decides each mark. An officer can mark someone with no record, or change Absent to Present. Present stays as it is, even for a forged request, and only Admin's correction route can change or remove it.
 - **One active event:** a partial unique index on `event_sessions`.
 - **No duplicate attendance:** a unique constraint on member and event day.
 - **Marking stops when an event ends:** each mark takes a row lock on the event inside its transaction, so a mark can't slip through as Admin ends the event.
 - **Public API closed:** row level security is on with no policies, so Supabase's public API can't read any table.
-- **Audit trail:** uploads, event changes, marks, Quick Entries and corrections are written to `audit_log`, in the same transaction as the change. The app has no screen for it; read it in the Supabase table editor.
+- **Audit trail:** registrations, approvals, uploads, event changes, marks, Quick Entries and corrections are written to `audit_log`, in the same transaction as the change. The app has no screen for it; read it in the Supabase table editor.
 
 ## Tests
 

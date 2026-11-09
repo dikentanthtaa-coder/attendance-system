@@ -41,6 +41,7 @@ export function PersonRow({
   meta,
   footer,
   actions,
+  actionsBelowOnPhone,
   hideAvatarOnPhone,
 }: {
   name: string;
@@ -48,27 +49,32 @@ export function PersonRow({
   meta: ReactNode;
   footer?: ReactNode;
   actions?: ReactNode;
+  /** For two or more large buttons, which would squeeze the name on a phone. */
+  actionsBelowOnPhone?: boolean;
   hideAvatarOnPhone?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
+    <div className={`flex items-center gap-3 px-4 py-3 ${actionsBelowOnPhone ? "flex-wrap sm:flex-nowrap" : ""}`}>
       <Avatar name={name} gender={gender} className={`self-start ${hideAvatarOnPhone ? "hidden sm:flex" : ""}`} />
-      <div className="min-w-0 flex-1">
+      <div className={`min-w-0 flex-1 ${actionsBelowOnPhone ? "basis-3/5" : ""}`}>
         <p className="text-base font-semibold break-words">{name}</p>
         {meta}
         {footer && <div className="mt-1.5 flex flex-wrap items-center gap-1.5">{footer}</div>}
       </div>
-      {actions && <div className="flex shrink-0 items-center gap-1">{actions}</div>}
+      {actions && <div className={`flex shrink-0 items-center ${actionsBelowOnPhone ? "w-full gap-2 sm:w-auto [&>button]:flex-1" : "gap-1"}`}>{actions}</div>}
     </div>
   );
 }
 
 /** Avatar and name for the first column of a table. */
-export function PersonCell({ name, gender }: { name: string; gender?: Gender }) {
+export function PersonCell({ name, gender, detail }: { name: string; gender?: Gender; detail?: ReactNode }) {
   return (
     <span className="flex items-center gap-2.5">
       <Avatar name={name} gender={gender} />
-      <span className="font-semibold">{name}</span>
+      <span className="min-w-0">
+        <span className="block font-semibold">{name}</span>
+        {detail && <span className="block text-xs whitespace-nowrap text-muted">{detail}</span>}
+      </span>
     </span>
   );
 }

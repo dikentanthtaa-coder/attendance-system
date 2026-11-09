@@ -5,17 +5,16 @@ import { redirect } from "next/navigation";
 import bcrypt from "bcryptjs";
 import { jwtVerify, SignJWT } from "jose";
 import { getSql } from "./db";
-import type { Gender } from "./shared";
+import { normalizeMobile } from "./shared";
 
 export type SessionUser = {
   id: string;
   username: string;
   displayName: string;
   role: "admin" | "officer";
-  genderScope: Gender | null;
 };
 
-export type Officer = SessionUser & { role: "officer"; genderScope: Gender };
+export type Officer = SessionUser & { role: "officer" };
 
 const COOKIE = "att_session";
 const SESSION_DAYS = 7; // long enough that nobody is logged out mid-event
@@ -33,16 +32,20 @@ function secret() {
 
 export type LoginResult =
   | { ok: true; user: SessionUser }
-  | { ok: false; reason: "invalid" | "locked" };
+  | { ok: false; reason: "invalid" | "locked" | "pending" | "rejected" };
 
-export async function verifyLogin(usernameRaw: string, password: string): Promise<LoginResult> {
+/** Admin logs in with a username; an officer with their email or mobile number. */
+export async function verifyLogin(identifierRaw: string, password: string): Promise<LoginResult> {
   const sql = getSql();
-  const username = usernameRaw.trim().toLowerCase();
+  const identifier = identifierRaw.trim().toLowerCase();
+  const mobile = normalizeMobile(identifier);
 
   const [row] = await sql`
-    select id, username, display_name, password_hash, role, gender_scope, is_active,
+    select id, username, display_name, password_hash, role, is_active, approval_status,
            locked_until is not null and locked_until > now() as locked
-    from app_users where username = ${username}`;
+    from app_users
+    where username = ${identifier} or email = ${identifier} ${mobile ? sql`or mobile = ${mobile}` : sql``}
+    limit 1`;
 
   if (!row) {
     await bcrypt.compare(password, DUMMY_HASH);
@@ -62,6 +65,8 @@ export async function verifyLogin(usernameRaw: string, password: string): Promis
   }
 
   await sql`update app_users set failed_attempts = 0, locked_until = null where id = ${row.id}`;
+  // Only said after the right password, so this can't be used to look up who has registered.
+  if (row.approval_status !== "approved") return { ok: false, reason: row.approval_status };
   return {
     ok: true,
     user: {
@@ -69,7 +74,6 @@ export async function verifyLogin(usernameRaw: string, password: string): Promis
       username: row.username,
       displayName: row.display_name,
       role: row.role,
-      genderScope: row.gender_scope,
     },
   };
 }
@@ -96,8 +100,9 @@ export async function endSession() {
 }
 
 /**
- * The cookie only proves identity. Role, gender scope and active status are always
- * read from the database, so a permission can't be claimed from the browser.
+ * The cookie only proves identity. Role, approval and active status are always read from
+ * the database, so a permission can't be claimed from the browser, and Admin removing an
+ * officer takes effect on that officer's next request.
  */
 export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   const token = (await cookies()).get(COOKIE)?.value;
@@ -113,8 +118,8 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   if (!userId) return null;
 
   const [row] = await getSql()`
-    select id, username, display_name, role, gender_scope
-    from app_users where id = ${userId} and is_active`;
+    select id, username, display_name, role
+    from app_users where id = ${userId} and is_active and approval_status = 'approved'`;
   if (!row) return null;
 
   return {
@@ -122,7 +127,6 @@ export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
     username: row.username,
     displayName: row.display_name,
     role: row.role,
-    genderScope: row.gender_scope,
   };
 });
 

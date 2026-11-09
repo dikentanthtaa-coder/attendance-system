@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ComponentProps, type ReactNode, type Ref } from "react";
-import { ChevronDown, Eye, EyeOff, Search, X, type LucideIcon } from "lucide-react";
+import { Eye, EyeOff, Search, X, type LucideIcon } from "lucide-react";
 
 /** 16px while typing, so phones don't zoom the page when the field takes focus. */
 const INPUT =
@@ -10,7 +10,7 @@ const INPUT =
 export function Field({ label, hint, htmlFor, children }: { label: string; hint?: string; htmlFor?: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <label htmlFor={htmlFor} className="text-sm font-semibold text-ink">
+      <label id={htmlFor && `${htmlFor}-label`} htmlFor={htmlFor} className="text-sm font-semibold text-ink">
         {label}
         {hint && <span className="ml-1 font-normal text-muted">{hint}</span>}
       </label>
@@ -44,17 +44,6 @@ export function PasswordInput({ className = "", ...props }: Omit<ComponentProps<
       >
         <Toggle aria-hidden size={18} />
       </button>
-    </div>
-  );
-}
-
-export function Select({ className = "", children, ...props }: ComponentProps<"select">) {
-  return (
-    <div className="relative">
-      <select {...props} className={`${INPUT} cursor-pointer appearance-none pr-9 md:text-sm ${className}`}>
-        {children}
-      </select>
-      <ChevronDown aria-hidden size={16} className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-muted" />
     </div>
   );
 }

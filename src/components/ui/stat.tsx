@@ -6,6 +6,7 @@ const STAT_TONES = {
   male: { box: "border-transparent bg-male-soft", label: "text-male-ink", note: "text-muted" },
   female: { box: "border-transparent bg-female-soft", label: "text-female-ink", note: "text-muted" },
   warn: { box: "border-transparent bg-warn-soft", label: "text-warn", note: "text-muted" },
+  danger: { box: "border-transparent bg-danger-soft", label: "text-danger", note: "text-muted" },
   neutral: { box: "border-line bg-white", label: "text-muted", note: "text-muted" },
 } as const;
 

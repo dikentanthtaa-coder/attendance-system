@@ -1,8 +1,8 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { CENTERS } from "@/lib/shared";
-import { TextInput } from "./ui";
+import { ListOption, ListPopup, TextInput } from "./ui";
 
 const OTHER = "Other";
 const OPTIONS: string[] = [...CENTERS, OTHER];
@@ -13,9 +13,16 @@ export const EMPTY_CENTER: CenterValue = { selected: "", other: "" };
 /** The final center name, or "" while the selection is incomplete. */
 export const centerName = (v: CenterValue) => (v.selected === OTHER ? v.other.trim() : v.selected);
 
+/** The dropdown's state for a center already saved: a listed one, or else "Other" with that name typed in. */
+export const centerValue = (name: string): CenterValue => {
+  const listed = CENTERS.find((c) => c.toLowerCase() === name.trim().toLowerCase());
+  return listed ? { selected: listed, other: "" } : { selected: OTHER, other: name };
+};
+
 /** Searchable dropdown of the listed centers, plus "Other" with a free-text field. */
 export function CenterSelect({ id, value, onChange }: { id: string; value: CenterValue; onChange: (value: CenterValue) => void }) {
   const listId = useId();
+  const anchorRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState(value.selected);
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
@@ -37,7 +44,7 @@ export function CenterSelect({ id, value, onChange }: { id: string; value: Cente
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="relative">
+      <div ref={anchorRef}>
         <TextInput
           id={id}
           role="combobox"
@@ -81,29 +88,20 @@ export function CenterSelect({ id, value, onChange }: { id: string; value: Cente
           }}
         />
         {open && (
-          <ul
-            id={listId}
-            role="listbox"
-            aria-label="Centers"
-            className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-control border border-line bg-white py-1 shadow-lg"
-          >
+          <ListPopup id={listId} anchorRef={anchorRef} aria-label="Centers">
             {matches.map((option, i) => (
-              <li
+              <ListOption
                 key={option}
-                role="option"
-                aria-selected={option === value.selected}
-                // mousedown fires before the input's blur, which would otherwise close the list first
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  choose(option);
-                }}
-                onMouseEnter={() => setHighlight(i)}
-                className={`flex min-h-11 cursor-pointer items-center px-3 text-sm ${i === highlight ? "bg-brand-soft" : ""} ${option === OTHER ? "border-t border-rule font-medium" : ""}`}
+                selected={option === value.selected}
+                highlighted={i === highlight}
+                divided={option === OTHER}
+                onChoose={() => choose(option)}
+                onHover={() => setHighlight(i)}
               >
                 {option}
-              </li>
+              </ListOption>
             ))}
-          </ul>
+          </ListPopup>
         )}
       </div>
       {value.selected === OTHER && (

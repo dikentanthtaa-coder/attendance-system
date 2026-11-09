@@ -8,11 +8,10 @@ export const GET = anyUserRoute(async (user) => {
   const events = await listEvents(sql);
   if (user.role !== "officer") return { events };
 
-  // An officer only ever gets the count for their own gender.
   const counts = await sql`
-    select a.event_day, count(*)::int as count
-    from attendance a join members m on m.id = a.member_id
-    where a.status = 'present' and m.gender = ${user.genderScope}
-    group by a.event_day`;
-  return { events, counts: Object.fromEntries(counts.map((c) => [c.event_day, c.count])) };
+    select event_day,
+           count(*) filter (where status = 'present')::int as present,
+           count(*) filter (where status = 'absent')::int as absent
+    from attendance group by event_day`;
+  return { events, counts: Object.fromEntries(counts.map((c) => [c.event_day, { present: c.present, absent: c.absent }])) };
 });

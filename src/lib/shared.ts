@@ -3,6 +3,10 @@
 export type Gender = "Male" | "Female";
 export type EventStatus = "not_started" | "active" | "ended";
 export type MemberSource = "excel_import" | "quick_entry";
+export type AttendanceStatus = "present" | "absent";
+export type OfficerStatus = "pending" | "approved" | "rejected";
+
+export const MIN_PASSWORD_LENGTH = 8;
 
 export const CENTERS = [
   "Varachha",
@@ -23,6 +27,17 @@ export const STATUS_LABEL: Record<EventStatus, string> = {
   not_started: "Not Started",
   active: "Active",
   ended: "Ended",
+};
+
+export const ATTENDANCE_LABEL: Record<AttendanceStatus, string> = {
+  present: "Present",
+  absent: "Absent",
+};
+
+export const OFFICER_STATUS_LABEL: Record<OfficerStatus, string> = {
+  pending: "Waiting for approval",
+  approved: "Approved",
+  rejected: "No access",
 };
 
 export const SOURCE_LABEL: Record<MemberSource, string> = {

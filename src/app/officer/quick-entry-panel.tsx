@@ -3,24 +3,27 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, CircleCheck, Phone, UserRound } from "lucide-react";
 import { CenterSelect, centerName, EMPTY_CENTER, type CenterValue } from "@/components/center-select";
-import { Alert, Button, Card, CardHeader, Field, TextInput } from "@/components/ui";
+import { Alert, Button, Card, CardHeader, Field, Select, TextInput, type SelectOption } from "@/components/ui";
 import { api, ClientApiError } from "@/lib/client-api";
-import { normalizeMobile, type EventSession, type Gender } from "@/lib/shared";
+import { normalizeMobile, type EventSession } from "@/lib/shared";
 
 export type QuickEntryPrefill = { name?: string; mobile?: string; globalMemberId?: string };
+
+const GENDER_OPTIONS: SelectOption[] = [
+  { value: "Male", label: "Male" },
+  { value: "Female", label: "Female" },
+];
 
 /** On the page rather than in a pop-up: nothing clips the center list and the phone's back gesture stays simple. */
 export function QuickEntryPanel({
   prefill,
   event,
-  gender,
   onCancel,
   onSaved,
   onEventChanged,
 }: {
   prefill: QuickEntryPrefill;
   event: EventSession;
-  gender: Gender;
   onCancel: () => void;
   onSaved: (name: string, markedAt: string) => void;
   onEventChanged: () => void;
@@ -28,6 +31,7 @@ export function QuickEntryPanel({
   const [globalMemberId, setGlobalMemberId] = useState(prefill.globalMemberId ?? "");
   const [name, setName] = useState(prefill.name ?? "");
   const [mobile, setMobile] = useState(prefill.mobile ?? "");
+  const [gender, setGender] = useState("");
   const [center, setCenter] = useState<CenterValue>(EMPTY_CENTER);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -54,6 +58,7 @@ export function QuickEntryPanel({
     e.preventDefault();
     setError("");
     if (!normalized) return setError("Enter a valid 10-digit mobile number.");
+    if (!gender) return setError("Please choose a gender.");
     if (!centerName(center)) return setError("Please choose a center. If you chose Other, type its name.");
     if (needsConfirmation) return;
 
@@ -65,6 +70,7 @@ export function QuickEntryPanel({
           globalMemberId,
           name,
           mobile: normalized,
+          gender,
           center: centerName(center),
           confirmDuplicateMobile: confirmedMobile === normalized,
         },
@@ -87,7 +93,7 @@ export function QuickEntryPanel({
         title="Quick Entry: new member"
         description={
           <>
-            Will be saved as <strong className="font-semibold text-ink">{gender}</strong> and marked present for <strong className="font-semibold text-ink">{event.name}</strong>.
+            Will be added as a new member and marked present for <strong className="font-semibold text-ink">{event.name}</strong>.
           </>
         }
       />
@@ -124,6 +130,10 @@ export function QuickEntryPanel({
             </div>
           </Alert>
         )}
+
+        <Field label="Gender" htmlFor="qe-gender">
+          <Select id="qe-gender" value={gender} onChange={setGender} options={GENDER_OPTIONS} placeholder="Choose gender" />
+        </Field>
 
         <Field label="Center" htmlFor="qe-center">
           <CenterSelect id="qe-center" value={center} onChange={setCenter} />

@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CalendarClock, CircleCheck, Hash, History, Lock, MapPin, Phone, Search, UserPlus } from "lucide-react";
+import { CalendarClock, CircleCheck, CircleX, Hash, History, Lock, MapPin, Phone, Search, UserPlus } from "lucide-react";
 import { EventDayTabs } from "@/components/event-days";
-import { Alert, AppShell, Badge, Button, Card, CardHeader, EmptyState, Field, MetaList, PersonRow, SearchInput, Spinner, useToast } from "@/components/ui";
+import { Alert, AppShell, AttendanceBadge, Badge, Button, Card, CardHeader, EmptyState, Field, GenderBadge, MetaList, PersonRow, SearchInput, Spinner, useToast } from "@/components/ui";
 import { api, ClientApiError } from "@/lib/client-api";
-import { formatTime, STATUS_LABEL, type EventSession, type Gender } from "@/lib/shared";
+import { formatTime, STATUS_LABEL, type AttendanceStatus, type EventSession, type Gender } from "@/lib/shared";
 import { QuickEntryPanel, type QuickEntryPrefill } from "./quick-entry-panel";
 
 type SearchResult = {
@@ -13,33 +13,38 @@ type SearchResult = {
   global_member_id: string | null;
   name: string;
   mobile: string;
+  gender: Gender;
   center: string;
-  present_at: string | null;
-  present_marked_by: string | null;
+  attendance_status: AttendanceStatus | null;
+  marked_at: string | null;
+  marked_by: string | null;
 };
 
-type MarkResponse = { status: "marked" | "already_present"; memberName: string; markedAt: string; markedBy: string };
+type MarkResponse = { status: "marked" | "already_present" | "already_absent"; memberName: string; markedAt: string; markedBy: string };
 
-type Marked = { key: number; label: string; name: string; at: string };
+type Marked = { key: number; status: AttendanceStatus; label: string; name: string; at: string };
+
+type DayCount = { present: number; absent: number };
 
 const POLL_MS = 5000;
 const RECENT_LIMIT = 5;
+const NO_COUNT: DayCount = { present: 0, absent: 0 };
 
-export function OfficerApp({ gender, displayName, initialEvents }: { gender: Gender; displayName: string; initialEvents: EventSession[] }) {
+export function OfficerApp({ displayName, initialEvents }: { displayName: string; initialEvents: EventSession[] }) {
   const [events, setEvents] = useState(initialEvents);
-  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [counts, setCounts] = useState<Record<string, DayCount>>({});
   // null means "follow whichever event is active".
   const [chosenDay, setChosenDay] = useState<number | null>(null);
 
   const activeDay = events.find((e) => e.status === "active")?.event_day ?? null;
   const selectedDay = chosenDay ?? activeDay ?? 1;
   const selected = events.find((e) => e.event_day === selectedDay)!;
-  const count = counts[selectedDay] ?? 0;
+  const count = counts[selectedDay] ?? NO_COUNT;
 
   const lastActiveDay = useRef(activeDay);
 
   const refreshEvents = useCallback(async () => {
-    const data = await api<{ events: EventSession[]; counts: Record<string, number> }>("/api/events");
+    const data = await api<{ events: EventSession[]; counts: Record<string, DayCount> }>("/api/events");
     setEvents(data.events);
     setCounts(data.counts);
     const nowActive = data.events.find((e) => e.status === "active")?.event_day ?? null;
@@ -64,17 +69,15 @@ export function OfficerApp({ gender, displayName, initialEvents }: { gender: Gen
   }, [refreshEvents]);
 
   return (
-    <AppShell subtitle={`${displayName} · ${gender} members only`} width="narrow">
+    <AppShell subtitle={`${displayName} · Attendance Officer`} width="narrow">
       <EventDayTabs events={events} selectedDay={selectedDay} onSelect={setChosenDay} />
 
       {selected.status === "active" ? (
         <MarkingPanel
           key={selectedDay}
           event={selected}
-          gender={gender}
           count={count}
-          onEventChanged={() => refreshEvents().catch(() => {})}
-          onMarked={() => setCounts((c) => ({ ...c, [selectedDay]: (c[selectedDay] ?? 0) + 1 }))}
+          onChanged={() => refreshEvents().catch(() => {})}
         />
       ) : (
         <Card>
@@ -87,7 +90,7 @@ export function OfficerApp({ gender, displayName, initialEvents }: { gender: Gen
                 {selected.status === "ended"
                   ? "This event has ended, so attendance can no longer be marked."
                   : "Attendance can be marked after Admin starts this event."}
-                {count > 0 && ` ${count} ${gender.toLowerCase()} members were marked present.`}
+                {count.present + count.absent > 0 && ` ${count.present} present and ${count.absent} absent were marked.`}
               </>
             }
             action={activeDay && <Button onClick={() => setChosenDay(activeDay)}>Go to Day {activeDay}, which is active</Button>}
@@ -98,37 +101,25 @@ export function OfficerApp({ gender, displayName, initialEvents }: { gender: Gen
   );
 }
 
-function MarkingHeading({ event, gender, count }: { event: EventSession; gender: Gender; count: number }) {
+function MarkingHeading({ event, count }: { event: EventSession; count: DayCount }) {
   return (
     <div className="flex items-center justify-between gap-3 bg-brand px-4 py-2.5 text-white">
       <h1 className="text-lg leading-tight font-bold">Marking {event.name}</h1>
       <p className="flex shrink-0 items-baseline gap-1.5" data-testid="present-count">
-        <span className="text-3xl leading-none font-bold">{count}</span>
-        <span className="text-sm text-white/85">{gender.toLowerCase()} present</span>
+        <span className="text-3xl leading-none font-bold">{count.present}</span>
+        <span className="text-sm text-white/85">present · {count.absent} absent</span>
       </p>
     </div>
   );
 }
 
-function MarkingPanel({
-  event,
-  gender,
-  count,
-  onEventChanged,
-  onMarked,
-}: {
-  event: EventSession;
-  gender: Gender;
-  count: number;
-  onEventChanged: () => void;
-  onMarked: () => void;
-}) {
+function MarkingPanel({ event, count, onChanged }: { event: EventSession; count: DayCount; onChanged: () => void }) {
   const toast = useToast();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [resultsFor, setResultsFor] = useState("");
   const [searchError, setSearchError] = useState("");
-  const [markingId, setMarkingId] = useState<number | null>(null);
+  const [marking, setMarking] = useState<{ id: number; status: AttendanceStatus } | null>(null);
   const [prefill, setPrefill] = useState<QuickEntryPrefill | null>(null);
   const [recent, setRecent] = useState<Marked[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -138,7 +129,7 @@ function MarkingPanel({
   const showResults = trimmed !== "" && resultsFor === trimmed;
   const searching = trimmed !== "" && resultsFor !== trimmed && !searchError;
   const noMatches = showResults && results.length === 0;
-  const onlyOne = showResults && results.length === 1 && !results[0].present_at;
+  const onlyOne = showResults && results.length === 1 && results[0].attendance_status !== "present";
 
   useEffect(() => {
     if (!trimmed) return;
@@ -171,34 +162,36 @@ function MarkingPanel({
     inputRef.current?.focus();
   };
 
-  const remember = (label: string, name: string, at: string) => {
+  const remember = (status: AttendanceStatus, label: string, name: string, at: string) => {
     nextKey.current += 1;
-    const entry = { key: nextKey.current, label, name, at };
+    const entry = { key: nextKey.current, status, label, name, at };
     setRecent((rows) => [entry, ...rows].slice(0, RECENT_LIMIT));
   };
 
-  async function mark(member: SearchResult) {
-    if (markingId !== null) return;
-    setMarkingId(member.id);
+  async function mark(member: SearchResult, status: AttendanceStatus) {
+    if (marking) return;
+    setMarking({ id: member.id, status });
     try {
       const res = await api<MarkResponse>("/api/officer/attendance", {
-        json: { memberId: member.id, eventDay: event.event_day },
+        json: { memberId: member.id, eventDay: event.event_day, status },
       });
-      if (res.status === "already_present") {
-        toast("warning", `Already Present: ${res.memberName} (${formatTime(res.markedAt)})`);
-        setResults((rows) =>
-          rows.map((r) => (r.id === member.id ? { ...r, present_at: res.markedAt, present_marked_by: res.markedBy } : r)),
-        );
-      } else {
-        remember("Present", res.memberName, res.markedAt);
-        onMarked();
+      if (res.status === "marked") {
+        remember(status, status === "present" ? "Present" : "Absent", res.memberName, res.markedAt);
+        onChanged();
         clearSearch();
+      } else {
+        // Someone else got there first, or this would undo Present, which only Admin can do.
+        const nowStatus: AttendanceStatus = res.status === "already_present" ? "present" : "absent";
+        toast("warning", `Already ${nowStatus === "present" ? "Present" : "Absent"}: ${res.memberName} (${formatTime(res.markedAt)})`);
+        setResults((rows) =>
+          rows.map((r) => (r.id === member.id ? { ...r, attendance_status: nowStatus, marked_at: res.markedAt, marked_by: res.markedBy } : r)),
+        );
       }
     } catch (err) {
       toast("error", (err as Error).message);
-      if (err instanceof ClientApiError && err.code === "event_not_active") onEventChanged();
+      if (err instanceof ClientApiError && err.code === "event_not_active") onChanged();
     } finally {
-      setMarkingId(null);
+      setMarking(null);
     }
   }
 
@@ -213,22 +206,21 @@ function MarkingPanel({
     return (
       <>
         <Card className="overflow-hidden">
-          <MarkingHeading event={event} gender={gender} count={count} />
+          <MarkingHeading event={event} count={count} />
         </Card>
         <QuickEntryPanel
           prefill={prefill}
           event={event}
-          gender={gender}
           onCancel={() => setPrefill(null)}
           onSaved={(name, at) => {
             setPrefill(null);
-            remember("Added and marked present", name, at);
-            onMarked();
+            remember("present", "Added and marked present", name, at);
+            onChanged();
             setQuery("");
             setResults([]);
             setResultsFor("");
           }}
-          onEventChanged={onEventChanged}
+          onEventChanged={onChanged}
         />
       </>
     );
@@ -239,7 +231,7 @@ function MarkingPanel({
   return (
     <>
       <Card aria-label={`Mark attendance for ${event.name}`} className="overflow-hidden">
-        <MarkingHeading event={event} gender={gender} count={count} />
+        <MarkingHeading event={event} count={count} />
         <div className="p-4">
           <Field label="Search by Member ID, name or mobile" htmlFor="member-search">
             <SearchInput
@@ -260,8 +252,8 @@ function MarkingPanel({
               onKeyDown={(e) => {
                 if (e.key !== "Enter" || !showResults) return;
                 e.preventDefault();
-                // Enter marks only when there's exactly one candidate, so it can never pick the wrong person.
-                if (onlyOne) mark(results[0]);
+                // Enter marks Present only when there's exactly one candidate, so it can never pick the wrong person.
+                if (onlyOne) mark(results[0], "present");
               }}
             />
           </Field>
@@ -272,7 +264,14 @@ function MarkingPanel({
 
       {!trimmed && latest && (
         // Next to the search box, because a phone's keyboard can hide anything lower down.
-        <Alert key={latest.key} tone="ok" role="status" className="rise-in" title={`${latest.label}: ${latest.name}`} action={<span className="text-sm font-semibold text-ok">{formatTime(latest.at)}</span>} />
+        <Alert
+          key={latest.key}
+          tone={latest.status === "present" ? "ok" : "warn"}
+          role="status"
+          className="rise-in"
+          title={`${latest.label}: ${latest.name}`}
+          action={<span className={`text-sm font-semibold ${latest.status === "present" ? "text-ok" : "text-warn"}`}>{formatTime(latest.at)}</span>}
+        />
       )}
 
       {searching && (
@@ -289,8 +288,9 @@ function MarkingPanel({
               <li key={member.id}>
                 <PersonRow
                   name={member.name}
-                  gender={gender}
+                  gender={member.gender}
                   hideAvatarOnPhone
+                  actionsBelowOnPhone={member.attendance_status !== "present"}
                   meta={
                     <MetaList
                       items={[
@@ -300,18 +300,13 @@ function MarkingPanel({
                       ]}
                     />
                   }
-                  actions={
-                    member.present_at ? (
-                      <span className="flex flex-col items-center gap-0.5 text-center">
-                        <Badge tone="warn" icon={CircleCheck}>Already Present</Badge>
-                        <span className="text-xs text-muted">{formatTime(member.present_at)}</span>
-                      </span>
-                    ) : (
-                      <Button variant="success" icon={CircleCheck} className="px-3" loading={markingId === member.id} disabled={markingId !== null} onClick={() => mark(member)}>
-                        Mark Present
-                      </Button>
-                    )
+                  footer={
+                    <>
+                      <GenderBadge gender={member.gender} />
+                      {member.attendance_status === "absent" && <AttendanceBadge status="absent" />}
+                    </>
                   }
+                  actions={<RowActions member={member} marking={marking} onMark={mark} />}
                 />
               </li>
             ))}
@@ -324,7 +319,7 @@ function MarkingPanel({
           <EmptyState
             icon={Search}
             titleAs="p"
-            title={`No ${gender.toLowerCase()} member matches “${trimmed}”`}
+            title={`No member matches “${trimmed}”`}
             description="Check the spelling or try the mobile number. If they are new, add them with Quick Entry."
           />
         </Card>
@@ -337,7 +332,7 @@ function MarkingPanel({
       )}
 
       <Button variant={noMatches ? "primary" : "secondary"} icon={UserPlus} size="lg" className="w-full" onClick={openQuickEntry}>
-        Quick Entry: add new {gender.toLowerCase()} member
+        Quick Entry: add new member
       </Button>
 
       {!trimmed && earlier.length > 0 && (
@@ -347,11 +342,51 @@ function MarkingPanel({
             {earlier.map((row) => (
               <li key={row.key} className="flex items-center justify-between gap-3 px-4 py-2.5 md:px-5">
                 <span className="min-w-0 font-medium break-words">{row.name}</span>
-                <span className="shrink-0 text-sm text-muted">{formatTime(row.at)}</span>
+                <span className="flex shrink-0 items-center gap-2 text-sm text-muted">
+                  <AttendanceBadge status={row.status} />
+                  {formatTime(row.at)}
+                </span>
               </li>
             ))}
           </ul>
         </Card>
+      )}
+    </>
+  );
+}
+
+/**
+ * Present is final for an officer, so it shows no buttons at all. Absent can still become Present,
+ * for someone who arrives late. Only Admin can do anything else.
+ */
+function RowActions({
+  member,
+  marking,
+  onMark,
+}: {
+  member: SearchResult;
+  marking: { id: number; status: AttendanceStatus } | null;
+  onMark: (member: SearchResult, status: AttendanceStatus) => void;
+}) {
+  const busy = (status: AttendanceStatus) => marking?.id === member.id && marking.status === status;
+
+  if (member.attendance_status === "present") {
+    return (
+      <span className="flex flex-col items-center gap-0.5 text-center">
+        <Badge tone="warn" icon={CircleCheck}>Already Present</Badge>
+        <span className="text-xs text-muted">{formatTime(member.marked_at)}</span>
+      </span>
+    );
+  }
+  return (
+    <>
+      <Button variant="success" icon={CircleCheck} className="px-3" loading={busy("present")} disabled={marking !== null} onClick={() => onMark(member, "present")}>
+        Mark Present
+      </Button>
+      {member.attendance_status !== "absent" && (
+        <Button variant="danger-outline" icon={CircleX} className="px-3" loading={busy("absent")} disabled={marking !== null} onClick={() => onMark(member, "absent")}>
+          Mark Absent
+        </Button>
       )}
     </>
   );

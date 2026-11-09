@@ -55,13 +55,13 @@ export const adminRoute = <C = unknown>(handler: Handler<SessionUser, C>) =>
 export const officerRoute = <C = unknown>(handler: Handler<Officer, C>) =>
   guarded((user) => {
     const u = signedIn(user);
-    if (u.role !== "officer" || !u.genderScope) {
+    if (u.role !== "officer") {
       throw new ApiError(403, "forbidden", "Only Attendance Officers can do this.");
     }
     return u as Officer;
   }, handler);
 
-/** Wrap unauthenticated routes (login) for the same error handling. */
+/** Wrap unauthenticated routes (login, registration) for the same error handling. */
 export function publicRoute(handler: (req: Request) => Promise<Response | object>) {
   return async (req: Request) => {
     try {

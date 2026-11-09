@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { CalendarCheck, Hash, MapPin, Pencil, Phone, SearchX, Trash2, Upload, UsersRound } from "lucide-react";
+import { CenterSelect, centerName, centerValue } from "@/components/center-select";
 import {
   Alert,
   Badge,
@@ -29,9 +30,10 @@ import {
   TextInput,
   useToast,
   type Column,
+  type SelectOption,
 } from "@/components/ui";
 import { api } from "@/lib/client-api";
-import { CENTERS, type Gender, type MemberSource } from "@/lib/shared";
+import type { Gender, MemberSource } from "@/lib/shared";
 
 type ImportSummary = {
   fileName: string;
@@ -355,24 +357,30 @@ function MemberList({ refreshKey, onFirstLoad }: { refreshKey: number; onFirstLo
   );
 }
 
+const GENDER_OPTIONS: SelectOption[] = [
+  { value: "Male", label: "Male" },
+  { value: "Female", label: "Female" },
+];
+
 function EditForm({ member, onClose, onSaved }: { member: Member; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({
     globalMemberId: member.global_member_id ?? "",
     name: member.name,
     mobile: member.mobile,
     gender: member.gender as string,
-    center: member.center,
   });
+  const [center, setCenter] = useState(() => centerValue(member.center));
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (!centerName(center)) return setError("Please choose a center. If you chose Other, type its name.");
     setBusy(true);
     setError("");
     try {
-      await api(`/api/admin/members/${member.id}`, { method: "PATCH", json: form });
+      await api(`/api/admin/members/${member.id}`, { method: "PATCH", json: { ...form, center: centerName(center) } });
       onSaved();
     } catch (err) {
       setError((err as Error).message);
@@ -389,16 +397,10 @@ function EditForm({ member, onClose, onSaved }: { member: Member; onClose: () =>
         <TextInput id="edit-mobile" required type="tel" value={form.mobile} onChange={set("mobile")} />
       </Field>
       <Field label="Gender" htmlFor="edit-gender">
-        <Select id="edit-gender" value={form.gender} onChange={set("gender")}>
-          <option>Male</option>
-          <option>Female</option>
-        </Select>
+        <Select id="edit-gender" value={form.gender} onChange={(gender) => setForm((f) => ({ ...f, gender }))} options={GENDER_OPTIONS} />
       </Field>
       <Field label="Center" htmlFor="edit-center">
-        <TextInput id="edit-center" required maxLength={80} list="edit-center-list" autoComplete="off" value={form.center} onChange={set("center")} />
-        <datalist id="edit-center-list">
-          {CENTERS.map((c) => <option key={c} value={c} />)}
-        </datalist>
+        <CenterSelect id="edit-center" value={center} onChange={setCenter} />
       </Field>
       <Field label="Global Member ID" hint="(optional)" htmlFor="edit-id">
         <TextInput id="edit-id" maxLength={50} autoComplete="off" value={form.globalMemberId} onChange={set("globalMemberId")} />

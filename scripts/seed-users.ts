@@ -1,8 +1,8 @@
-// Creates the three pre-built accounts. There is no signup, so this is the only
-// way accounts come into existence.
+// Creates the Admin account. Attendance Officers register themselves in the app, and Admin
+// approves them.
 //
-//   npm run seed            create any missing account
-//   npm run seed -- --reset also issue new passwords for existing accounts
+//   npm run seed            create the account if it's missing
+//   npm run seed -- --reset also issue a new password for it
 //
 // New passwords are written to .credentials.local.txt (git-ignored), never to stdout.
 import { randomBytes } from "node:crypto";
@@ -18,11 +18,7 @@ const sql = postgres(url, { prepare: false, max: 1, ssl: local ? false : "requir
 const reset = process.argv.includes("--reset");
 const CREDENTIALS_FILE = ".credentials.local.txt";
 
-const ACCOUNTS = [
-  { username: "admin", displayName: "Admin", role: "admin", gender: null },
-  { username: "male.officer", displayName: "Male Officer", role: "officer", gender: "Male" },
-  { username: "female.officer", displayName: "Female Officer", role: "officer", gender: "Female" },
-] as const;
+const ACCOUNTS = [{ username: "admin", displayName: "Admin", role: "admin" }] as const;
 
 function generatePassword() {
   // 15 readable characters in three groups, about 75 bits of entropy.
@@ -44,8 +40,8 @@ async function main() {
     const hash = await bcrypt.hash(password, 12);
 
     await sql`
-      insert into app_users (username, display_name, password_hash, role, gender_scope)
-      values (${account.username}, ${account.displayName}, ${hash}, ${account.role}, ${account.gender})
+      insert into app_users (username, display_name, password_hash, role, approval_status)
+      values (${account.username}, ${account.displayName}, ${hash}, ${account.role}, 'approved')
       on conflict (username) do update
         set password_hash = excluded.password_hash, failed_attempts = 0, locked_until = null`;
     lines.push(`${account.displayName.padEnd(16)} username: ${account.username.padEnd(16)} password: ${password}`);

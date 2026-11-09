@@ -74,9 +74,9 @@ export function AppShell({
                     key={href}
                     href={href}
                     aria-current={current ? "page" : undefined}
-                    className={`flex min-h-11 flex-1 items-center justify-center gap-2 rounded-control px-4 text-sm font-semibold whitespace-nowrap transition-colors duration-150 md:flex-none ${current ? "bg-white text-brand-dark" : "text-white hover:bg-white/15"}`}
+                    className={`flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-control px-2 text-sm font-semibold whitespace-nowrap transition-colors duration-150 sm:px-4 md:flex-none ${current ? "bg-white text-brand-dark" : "text-white hover:bg-white/15"}`}
                   >
-                    <Icon aria-hidden size={16} />
+                    <Icon aria-hidden size={16} className="hidden shrink-0 sm:block" />
                     {label}
                   </Link>
                 );

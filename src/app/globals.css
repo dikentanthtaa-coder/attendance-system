@@ -81,6 +81,17 @@
     caret-color: var(--color-brand);
   }
 
+  /* Tailwind v4 leaves buttons with the default arrow, so set it once here for the whole app. */
+  button,
+  a[href],
+  [role="option"] {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
   /* SearchInput has its own clear button. */
   input[type="search"]::-webkit-search-cancel-button {
     display: none;

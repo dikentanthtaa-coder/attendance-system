@@ -4,8 +4,8 @@
 
 ## Who uses it, and where
 
-- **Male Officer and Female Officer:** at a registration desk during the event, on a phone or tablet, with a queue in front of them. They need to find a person and mark them present in seconds, usually one-handed, often with the on-screen keyboard open.
-- **Admin:** on a laptop. Uploads the member list before the event, starts and ends each day, watches the counts, exports the report, and corrects mistakes.
+- **Attendance Officers:** many people, who register themselves and are approved by Admin. They work at a registration desk during the event, on a phone or tablet, with a queue in front of them. They need to find a person and mark them Present or Absent in seconds, usually one-handed, often with the on-screen keyboard open.
+- **Admin:** on a laptop. Uploads the member list before the event, approves officers, starts and ends each day, watches the counts, exports the report, and corrects mistakes.
 
 ## What each screen must answer first
 
@@ -14,10 +14,11 @@
 
 ## Rules the design has to respect
 
-- An officer only ever sees their own gender's members.
+- Only people Admin has approved can see member details, because registration is open to anyone with the link.
+- An officer can mark Present or Absent, and change Absent to Present for a late arrival. Undoing Present or removing attendance is Admin only, and needs a reason.
 - Attendance can only be marked on the active day, so a day's status must be readable at a glance.
 - The officer must always get visible confirmation, even with the keyboard open.
-- Mistakes can only be corrected by Admin, so an accidental tap should be hard to make.
+- An officer can't undo Present, so an accidental tap should be hard to make.
 
 ## Tone
 

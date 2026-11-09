@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { Check, Circle, CircleDot, FileSpreadsheet, UserPlus, type LucideIcon } from "lucide-react";
-import { SOURCE_LABEL, STATUS_LABEL, type EventStatus, type Gender, type MemberSource } from "@/lib/shared";
+import { Ban, Check, Circle, CircleCheck, CircleDot, CircleX, Clock, FileSpreadsheet, UserPlus, type LucideIcon } from "lucide-react";
+import { ATTENDANCE_LABEL, OFFICER_STATUS_LABEL, SOURCE_LABEL, STATUS_LABEL, type AttendanceStatus, type EventStatus, type Gender, type MemberSource, type OfficerStatus } from "@/lib/shared";
 
 const TONES = {
   neutral: "bg-active text-ink",
@@ -35,6 +35,23 @@ const STATUS_LOOK: Record<EventStatus, { tone: BadgeTone; icon: LucideIcon }> = 
 export function StatusBadge({ status, compact }: { status: EventStatus; compact?: boolean }) {
   const { tone, icon } = STATUS_LOOK[status];
   return <Badge tone={tone} icon={icon} compact={compact}>{STATUS_LABEL[status]}</Badge>;
+}
+
+export function AttendanceBadge({ status }: { status: AttendanceStatus }) {
+  return status === "present"
+    ? <Badge tone="ok" icon={CircleCheck}>{ATTENDANCE_LABEL.present}</Badge>
+    : <Badge tone="danger" icon={CircleX}>{ATTENDANCE_LABEL.absent}</Badge>;
+}
+
+const OFFICER_LOOK: Record<OfficerStatus, { tone: BadgeTone; icon: LucideIcon }> = {
+  pending: { tone: "warn", icon: Clock },
+  approved: { tone: "ok", icon: Check },
+  rejected: { tone: "danger", icon: Ban },
+};
+
+export function OfficerStatusBadge({ status }: { status: OfficerStatus }) {
+  const { tone, icon } = OFFICER_LOOK[status];
+  return <Badge tone={tone} icon={icon}>{OFFICER_STATUS_LABEL[status]}</Badge>;
 }
 
 export function GenderBadge({ gender }: { gender: Gender }) {

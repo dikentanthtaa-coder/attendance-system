@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ApiError } from "./api";
 import type { Officer, SessionUser } from "./auth";
 import { getSql, isUniqueViolation, withTransaction } from "./db";
-import { normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName } from "./shared";
+import { normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName, type AttendanceStatus } from "./shared";
 
 type Sql = ReturnType<typeof getSql>;
 
@@ -37,7 +37,7 @@ function escapeLike(value: string) {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
-export async function searchMembers(officer: Officer, query: string, eventDay: number) {
+export async function searchMembers(query: string, eventDay: number) {
   const q = query.trim().replace(/\s+/g, " ").slice(0, 80);
   if (!q) return [];
 
@@ -53,18 +53,15 @@ export async function searchMembers(officer: Officer, query: string, eventDay: n
   const nameMatch = tokens.reduce((acc, token) => sql`${acc} and m.name ilike ${token}`, sql`true`);
 
   const rows = await sql`
-    select m.id, m.global_member_id, m.name, m.mobile, m.center,
-           a.marked_at as present_at, u.display_name as present_marked_by
+    select m.id, m.global_member_id, m.name, m.mobile, m.gender, m.center,
+           a.status as attendance_status, a.marked_at, u.display_name as marked_by
     from members m
     left join attendance a
-      on a.member_id = m.id and a.event_day = ${eventDay} and a.status = 'present'
+      on a.member_id = m.id and a.event_day = ${eventDay} and a.status in ('present', 'absent')
     left join app_users u on u.id = a.marked_by
-    where m.gender = ${officer.genderScope}
-      and (
-        m.global_member_id like ${idPrefix}
-        or (${nameMatch})
-        ${mobilePattern ? sql`or m.mobile like ${mobilePattern}` : sql``}
-      )
+    where m.global_member_id like ${idPrefix}
+      or (${nameMatch})
+      ${mobilePattern ? sql`or m.mobile like ${mobilePattern}` : sql``}
     order by
       case
         when m.global_member_id = ${q.toUpperCase()} then 0
@@ -80,48 +77,56 @@ export async function searchMembers(officer: Officer, query: string, eventDay: n
   return rows;
 }
 
-export async function markAttendance(officer: Officer, memberId: number, eventDay: number) {
+/**
+ * What an officer may do is decided here, in one statement, so two officers tapping at once can't
+ * get around it. Nothing yet, or removed by Admin: either status. Absent: can become Present, for
+ * someone who arrives late. Present: stays as it is, because only Admin can undo attendance.
+ */
+export async function markAttendance(officer: Officer, memberId: number, eventDay: number, status: AttendanceStatus) {
   return withTransaction(async (tx) => {
     await requireActiveEvent(tx, eventDay);
 
-    // Filtering by gender here means a member outside the officer's scope simply doesn't exist for them.
-    const [member] = await tx`
-      select id, name, global_member_id from members
-      where id = ${memberId} and gender = ${officer.genderScope}`;
+    const [member] = await tx`select id, name from members where id = ${memberId}`;
     if (!member) throw new ApiError(404, "member_not_found", "Member not found.");
 
-    const [inserted] = await tx`
-      insert into attendance (member_id, event_day, marked_by)
-      values (${member.id}, ${eventDay}, ${officer.id})
+    const [before] = await tx`select status from attendance where member_id = ${member.id} and event_day = ${eventDay}`;
+
+    const [saved] = await tx`
+      insert into attendance (member_id, event_day, marked_by, status)
+      values (${member.id}, ${eventDay}, ${officer.id}, ${status})
       on conflict (member_id, event_day) do update
-        set status = 'present', marked_at = now(), marked_by = excluded.marked_by,
+        set status = excluded.status, marked_at = now(), marked_by = excluded.marked_by,
             cancelled_at = null, cancelled_by = null, cancel_reason = null
         where attendance.status = 'cancelled'
+           or (attendance.status = 'absent' and excluded.status = 'present')
       returning id, marked_at`;
 
-    if (!inserted) {
+    if (!saved) {
       const [existing] = await tx`
-        select a.marked_at, u.display_name as marked_by
+        select a.status, a.marked_at, u.display_name as marked_by
         from attendance a join app_users u on u.id = a.marked_by
         where a.member_id = ${member.id} and a.event_day = ${eventDay}`;
       return {
-        status: "already_present" as const,
+        status: existing.status === "present" ? ("already_present" as const) : ("already_absent" as const),
         memberName: member.name as string,
         markedAt: existing.marked_at as Date,
         markedBy: existing.marked_by as string,
       };
     }
 
-    await writeAudit(tx, officer, "attendance.mark", inserted.id, {
+    await writeAudit(tx, officer, "attendance.mark", saved.id, {
       member_id: member.id,
       member_name: member.name,
       event_day: eventDay,
+      status,
+      previous_status: before?.status ?? null,
     });
 
     return {
       status: "marked" as const,
+      attendance: status,
       memberName: member.name as string,
-      markedAt: inserted.marked_at as Date,
+      markedAt: saved.marked_at as Date,
       markedBy: officer.displayName,
     };
   });
@@ -145,6 +150,7 @@ export const quickEntrySchema = z.object({
     }
     return mobile;
   }),
+  gender: z.enum(["Male", "Female"], "Please choose a gender."),
   center: z.string().max(80, "Center name is too long.").transform(normalizeCenter).pipe(z.string().min(1, "Center is required.")),
   confirmDuplicateMobile: z.boolean().optional().default(false),
 });
@@ -157,16 +163,9 @@ export async function quickEntry(officer: Officer, input: z.output<typeof quickE
       await requireActiveEvent(tx, input.eventDay);
 
       if (globalId) {
-        const [taken] = await tx`select name, gender from members where global_member_id = ${globalId}`;
+        const [taken] = await tx`select name from members where global_member_id = ${globalId}`;
         if (taken) {
-          // Only name the holder if the officer is allowed to see that member.
-          throw new ApiError(
-            409,
-            "member_id_taken",
-            taken.gender === officer.genderScope
-              ? `Member ID ${globalId} already belongs to ${taken.name}. Search for this member instead.`
-              : `Member ID ${globalId} is already in use.`,
-          );
+          throw new ApiError(409, "member_id_taken", `Member ID ${globalId} already belongs to ${taken.name}. Search for this member instead.`);
         }
       }
 
@@ -178,10 +177,9 @@ export async function quickEntry(officer: Officer, input: z.output<typeof quickE
       }
 
       // Always a brand-new row: an existing member with the same number is never touched.
-      // Gender comes from the login, not from the request.
       const [member] = await tx`
         insert into members (global_member_id, name, mobile, gender, center, created_source, created_by, created_event_day)
-        values (${globalId}, ${input.name}, ${input.mobile}, ${officer.genderScope}, ${input.center},
+        values (${globalId}, ${input.name}, ${input.mobile}, ${input.gender}, ${input.center},
                 'quick_entry', ${officer.id}, ${input.eventDay})
         returning id, name`;
 
@@ -193,7 +191,7 @@ export async function quickEntry(officer: Officer, input: z.output<typeof quickE
       await writeAudit(tx, officer, "member.quick_entry", member.id, {
         name: member.name,
         mobile: input.mobile,
-        gender: officer.genderScope,
+        gender: input.gender,
         center: input.center,
         global_member_id: globalId,
         event_day: input.eventDay,
