@@ -426,9 +426,9 @@ function EditForm({ member, onClose, onSaved }: { member: Member; onClose: () =>
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       <Field label="Name" htmlFor="edit-name">
-        <TextInput id="edit-name" required maxLength={120} value={form.name} onChange={set("name")} />
+        <TextInput id="edit-name" placeholder="e.g. Ghanshyam Pande" required maxLength={120} value={form.name} onChange={set("name")} />
       </Field>
-      <DigitsField id="edit-mobile" label="Mobile Number" digits={10} optional type="tel" inputRef={mobileRef} value={form.mobile} clean={mobileInputValue} onValue={setValue("mobile")} />
+      <DigitsField id="edit-mobile" placeholder="e.g. 9876543210" label="Mobile Number" digits={10} optional type="tel" inputRef={mobileRef} value={form.mobile} clean={mobileInputValue} onValue={setValue("mobile")} />
       <Field label="Gender" htmlFor="edit-gender">
         <Select id="edit-gender" value={form.gender} onChange={(gender) => setForm((f) => ({ ...f, gender }))} options={GENDER_OPTIONS} />
       </Field>
@@ -437,6 +437,7 @@ function EditForm({ member, onClose, onSaved }: { member: Member; onClose: () =>
       </Field>
       <DigitsField
         id="edit-id"
+        placeholder="e.g. 206383"
         label="Global Member ID"
         digits={MEMBER_ID_DIGITS}
         optional
@@ -517,9 +518,9 @@ function AddMemberForm({ onClose, onAdded }: { onClose: () => void; onAdded: (na
       className="flex flex-col gap-4"
     >
       <Field label="Name" htmlFor="add-name">
-        <TextInput id="add-name" required autoFocus maxLength={120} value={name} onChange={(e) => edit(setName)(e.target.value)} />
+        <TextInput id="add-name" placeholder="e.g. Ghanshyam Pande" required autoFocus maxLength={120} value={name} onChange={(e) => edit(setName)(e.target.value)} />
       </Field>
-      <DigitsField id="add-mobile" label="Mobile Number" digits={10} optional type="tel" inputRef={mobileRef} value={mobile} clean={mobileInputValue} onValue={edit(setMobile)} />
+      <DigitsField id="add-mobile" placeholder="e.g. 9876543210" label="Mobile Number" digits={10} optional type="tel" inputRef={mobileRef} value={mobile} clean={mobileInputValue} onValue={edit(setMobile)} />
       <Field label="Gender" htmlFor="add-gender">
         <Select id="add-gender" value={gender} onChange={edit(setGender)} options={GENDER_OPTIONS} placeholder="Choose gender" />
       </Field>
@@ -534,7 +535,7 @@ function AddMemberForm({ onClose, onAdded }: { onClose: () => void; onAdded: (na
           }}
         />
       </Field>
-      <DigitsField id="add-id" label="Global Member ID" digits={MEMBER_ID_DIGITS} optional inputRef={idRef} value={globalMemberId} clean={memberIdInputValue} onValue={edit(setGlobalMemberId)} />
+      <DigitsField id="add-id" placeholder="e.g. 206383" label="Global Member ID" digits={MEMBER_ID_DIGITS} optional inputRef={idRef} value={globalMemberId} clean={memberIdInputValue} onValue={edit(setGlobalMemberId)} />
 
       {warning && (
         <Alert tone="warn" title={warning.title}>

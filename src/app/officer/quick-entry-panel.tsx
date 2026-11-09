@@ -145,11 +145,12 @@ export function QuickEntryPanel({
 
       <form onSubmit={submit} className="flex flex-col gap-4 p-4 md:p-5">
         <Field label="Name" htmlFor="qe-name">
-          <TextInput id="qe-name" ref={nameRef} icon={UserRound} required maxLength={120} autoFocus={!prefill.name} value={name} onChange={(e) => setName(e.target.value)} />
+          <TextInput id="qe-name" placeholder="e.g. Ghanshyam Pande" ref={nameRef} icon={UserRound} required maxLength={120} autoFocus={!prefill.name} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
 
         <DigitsField
           id="qe-mobile"
+          placeholder="e.g. 9876543210"
           label="Mobile Number"
           digits={10}
           icon={Phone}
@@ -223,6 +224,7 @@ export function QuickEntryPanel({
 
         <DigitsField
           id="qe-id"
+          placeholder="e.g. 206383"
           label="Global Member ID"
           digits={MEMBER_ID_DIGITS}
           optional

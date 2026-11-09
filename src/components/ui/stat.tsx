@@ -2,17 +2,18 @@ import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 
 const STAT_TONES = {
-  hero: { box: "border-transparent bg-brand-deep text-white", label: "text-white/85", note: "text-white/85" },
-  male: { box: "border-transparent bg-male-soft", label: "text-male-ink", note: "text-muted" },
-  female: { box: "border-transparent bg-female-soft", label: "text-female-ink", note: "text-muted" },
-  warn: { box: "border-transparent bg-warn-soft", label: "text-warn", note: "text-muted" },
-  neutral: { box: "border-line bg-white", label: "text-muted", note: "text-muted" },
+  hero: { box: "border-transparent bg-brand-deep text-white", label: "text-white/85", note: "text-white/85", rule: "border-white/20" },
+  male: { box: "border-transparent bg-male-soft", label: "text-male-ink", note: "text-muted", rule: "border-male-ink/15" },
+  female: { box: "border-transparent bg-female-soft", label: "text-female-ink", note: "text-muted", rule: "border-female-ink/15" },
+  warn: { box: "border-transparent bg-warn-soft", label: "text-warn", note: "text-muted", rule: "border-warn/20" },
+  neutral: { box: "border-line bg-white", label: "text-muted", note: "text-muted", rule: "border-line" },
 } as const;
 
 export function StatCard({
   label,
   value,
   note,
+  secondary,
   icon: Icon,
   tone = "neutral",
   testId,
@@ -21,6 +22,8 @@ export function StatCard({
   label: string;
   value: ReactNode;
   note?: ReactNode;
+  /** A second figure under the first, such as how many of a total are present. */
+  secondary?: { label: string; value: ReactNode; testId?: string };
   icon: LucideIcon;
   tone?: keyof typeof STAT_TONES;
   testId?: string;
@@ -33,7 +36,13 @@ export function StatCard({
         <Icon aria-hidden size={16} className="shrink-0" />
         {label}
       </p>
-      <p className={`mt-1 font-bold tracking-tight ${tone === "hero" ? "text-4xl leading-11" : "text-3xl leading-10"}`} data-testid={testId}>{value}</p>
+      <p className={`mt-1 font-bold tracking-tight tabular-nums ${tone === "hero" ? "text-4xl leading-11" : "text-3xl leading-10"}`} data-testid={testId}>{value}</p>
+      {secondary && (
+        <p className={`mt-2 flex items-baseline gap-2 border-t pt-2 ${look.rule}`}>
+          <span className="text-2xl leading-8 font-bold tracking-tight tabular-nums" data-testid={secondary.testId}>{secondary.value}</span>
+          <span className={`text-sm font-semibold ${look.label}`}>{secondary.label}</span>
+        </p>
+      )}
       {note && <p className={`text-xs ${look.note}`}>{note}</p>}
     </div>
   );

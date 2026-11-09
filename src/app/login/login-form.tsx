@@ -30,6 +30,7 @@ export function LoginForm() {
         <TextInput
           id="username"
           icon={UserRound}
+          placeholder="Enter your username"
           autoFocus
           autoCapitalize="none"
           autoCorrect="off"
@@ -42,6 +43,7 @@ export function LoginForm() {
       <Field label="Password" htmlFor="password">
         <PasswordInput
           id="password"
+          placeholder="Enter your password"
           autoComplete="current-password"
           required
           value={password}

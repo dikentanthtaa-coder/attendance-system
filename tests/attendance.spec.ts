@@ -54,6 +54,13 @@ const showView = async (page: Page, name: "Mark" | "History") => {
   const bar = page.getByRole("navigation", { name: "Marking view" });
   if (await bar.isVisible()) await bar.getByRole("button", { name, exact: true }).click();
 };
+/** Visible boxes you type into that show no placeholder. Dropdowns always show a value instead. */
+const missingPlaceholders = (page: Page) =>
+  page.evaluate(() =>
+    [...document.querySelectorAll<HTMLInputElement>("input:not([type=hidden]):not([type=file]):not([type=checkbox]):not([type=radio]), textarea")]
+      .filter((el) => el.offsetParent !== null && !el.closest("[role=combobox], [aria-haspopup]") && el.getAttribute("role") !== "combobox" && !el.placeholder?.trim())
+      .map((el) => el.id || el.name || el.outerHTML.slice(0, 60)),
+  );
 const pick = async (page: Page, label: string, option: string) => {
   await page.getByLabel(label, { exact: true }).click();
   await page.getByRole("option", { name: option, exact: true }).click();
@@ -83,6 +90,7 @@ let adminApi: APIRequestContext, officerApi: APIRequestContext, officer2Api: API
 test("login: three accounts only, no signup, wrong password refused", async ({ browser, page, request }) => {
   await page.goto("/");
   await page.waitForURL("**/login");
+  expect(await missingPlaceholders(page)).toEqual([]);
   await expect(page.getByText(/sign ?up|register/i)).toHaveCount(0);
   expect((await page.goto("/register"))?.status()).toBe(404);
   expect((await request.post("/api/auth/register", { data: { email: "x@y.z", password: "long-enough-1" } })).status()).toBe(404);
@@ -182,6 +190,7 @@ test("reset password: temporary password shown once, every device logged out, an
   expect((await (await change(temporary)).json()).code).toBe("same_password");
 
   const fresh = "my-own-password-9";
+  expect(await missingPlaceholders(device)).toEqual([]);
   await device.getByLabel("New Password").fill(fresh);
   await device.getByLabel("Confirm Password").fill(fresh);
   await device.getByRole("button", { name: "Save New Password" }).click();
@@ -682,6 +691,7 @@ test("Quick Entry mobile number: digits only and exactly 10", async () => {
   await officer.getByRole("button", { name: /Quick Entry/ }).click();
   const panel = officer.getByRole("region", { name: "Quick Entry" });
   const box = panel.getByLabel("Mobile Number");
+  expect(await missingPlaceholders(officer)).toEqual([]);
 
   // Letters and symbols don't appear, and typing stops at 10 digits.
   await box.pressSequentially("98a76-5 43210 99");
@@ -761,6 +771,8 @@ test("Admin adds a member by hand: checked like Quick Entry, saved as Register, 
   await admin.goto("/admin/members");
   await admin.getByRole("button", { name: "Add Member" }).click();
   const dialog = admin.getByRole("dialog", { name: "Add member" });
+  await expect(dialog.getByLabel("Name")).toBeVisible();
+  expect(await missingPlaceholders(admin)).toEqual([]);
 
   await dialog.getByLabel("Name").fill("Hand Added");
   const mobile = dialog.getByLabel("Mobile Number");
@@ -878,6 +890,7 @@ test("totals and history: each officer sees their own and the whole, and a new m
   await expect(history).not.toContainText("Others Olga");
   await expect(history).not.toContainText("Radha");
   await expect(officer.getByRole("combobox", { name: "Show" })).toHaveCount(0);
+  await expect(history.getByRole("button", { name: /^Remove/ })).toHaveCount(0); // only Admin can remove a mark
   const allParam = await (await officerApi.get("/api/officer/history?day=1&scope=all")).json();
   expect(allParam.records.every((r: { gender: string }) => r.gender === "Male")).toBe(true);
 
@@ -908,10 +921,10 @@ test("totals and history: each officer sees their own and the whole, and a new m
   await expect(admin.getByTestId("officer-totals")).toContainText(String(await dbTotal()));
   await admin.screenshot({ path: "test-results/screens/admin-by-officer.png", fullPage: true });
 
-  await table.getByRole("button", { name: "View history for Female Officer" }).click();
-  const records = admin.getByRole("region", { name: "Attendance records" });
-  await expect(records).toContainText("Others Olga");
-  await expect(records).not.toContainText("Suresh Shah");
+  // The list of every mark is gone from the Dashboard. Choosing an officer narrows the numbers and the export.
+  await expect(admin.getByRole("region", { name: "Attendance records" })).toHaveCount(0);
+  await expect(table.getByRole("button", { name: /View history/ })).toHaveCount(0);
+  await pick(admin, "Marked by", "Female Officer");
   await expect(admin.getByTestId("stat-total")).toHaveText(String(await dbTotal("female.officer")));
 
   // The export follows the same filter, and carries the officer-wise totals.
@@ -927,7 +940,7 @@ test("totals and history: each officer sees their own and the whole, and a new m
   expect(summaryText).toContain("All officers");
 
   await admin.getByRole("button", { name: "Clear filters" }).click();
-  await expect(records).toContainText("Suresh Shah");
+  await expect(admin.getByTestId("stat-total")).toHaveText(String(await dbTotal()));
 
   async function dbTotal(username?: string) {
     return (await db`
@@ -1023,7 +1036,8 @@ test("pages arrive with their numbers already in them, not placeholders to fill 
   expect(dashboard).toContain('data-testid="stat-total"');
   const total = (await db`select count(*)::int as n from attendance where status = 'present'`)[0].n;
   expect(dashboard).toMatch(new RegExp(`data-testid="stat-total"[^>]*>${total}<`));
-  expect(dashboard).toContain("Attendance report");
+  expect(dashboard).toContain("Total Users");
+  expect(dashboard).not.toContain("Attendance report");
 
   const members = await html(adminApi, "/admin/members");
   expect(members).not.toContain("animate-pulse");
@@ -1183,13 +1197,32 @@ test("dashboard: totals respond to filters and match the database", async () => 
 
   await pick(admin, "Member source", "Quick Member");
   await expect(admin.getByTestId("stat-total")).toHaveText(String(await count("and m.created_source='quick_entry'")));
-  await expect(admin.getByRole("region", { name: "Attendance records" })).toContainText("Quick Member");
+  await expect(admin.getByTestId("stat-quick")).toHaveText(String(await count("and m.created_source='quick_entry'")));
   await pick(admin, "Member source", "All");
 
   await expect(admin.getByText(/absent/i)).toHaveCount(0);
 
-  const quickToday = (await db`select count(*)::int as n from members where created_source = 'quick_entry'`)[0].n;
-  await expect(admin.getByTestId("stat-quick")).toHaveText(String(quickToday));
+  // Each card: the total first, and how many of them are present below it.
+  const [m] = await db`
+    select count(*)::int as total, count(*) filter (where gender = 'Male')::int as male,
+           count(*) filter (where gender = 'Female')::int as female,
+           count(*) filter (where created_source = 'quick_entry')::int as quick
+    from members`;
+  await expect(admin.getByTestId("stat-members")).toHaveText(String(m.total));
+  await expect(admin.getByTestId("stat-members-male")).toHaveText(String(m.male));
+  await expect(admin.getByTestId("stat-members-female")).toHaveText(String(m.female));
+  await expect(admin.getByTestId("stat-members-quick")).toHaveText(String(m.quick));
+  await expect(admin.getByTestId("stat-quick")).toHaveText(String(await count("and m.created_source='quick_entry'")));
+  const cards = (await admin.getByRole("region", { name: "Summary" }).innerText()).replace(/\s+/g, " ");
+  expect(cards).toMatch(/Total Users \d+ \d+ Combined attendees/);
+  expect(cards).toMatch(/Total Male \d+ \d+ Present Male/);
+  expect(cards).toMatch(/Total Female \d+ \d+ Present Female/);
+  expect(cards).toMatch(/Total Quick Members \d+ \d+ Present Quick Members/);
+  // The totals follow the member filters too.
+  await pick(admin, "Gender", "Female");
+  await expect(admin.getByTestId("stat-members-male")).toHaveText("0");
+  await expect(admin.getByTestId("stat-members")).toHaveText(String(m.female));
+  await pick(admin, "Gender", "All");
 });
 
 test("dropdowns: not the browser's own, and work by mouse and keyboard", async () => {
@@ -1431,15 +1464,19 @@ test("Excel export contains exactly the filtered data, and tells the sources apa
 });
 
 test("Admin corrections: remove attendance with a reason, logged, and re-markable", async () => {
-  await admin.goto("/admin");
-  const row = admin.getByRole("row").filter({ hasText: "Raju Pandya" }).first();
-  await row.getByRole("button", { name: "Remove" }).click();
+  // Removing a mark is on Admin's History, on the Mark Attendance page.
+  await admin.goto("/admin/mark");
+  await admin.getByRole("navigation", { name: "Event days" }).getByRole("button", { name: /^Day 1/ }).click();
+  await pick(admin, "Show", "Everyone");
+  const history = admin.getByRole("region", { name: "Attendance history" });
+  await history.getByRole("listitem").filter({ hasText: "Raju Pandya" }).getByRole("button", { name: "Remove Raju Pandya" }).click();
   const dialog = admin.getByRole("dialog");
   await expect(dialog.getByRole("button", { name: "Remove Attendance" })).toBeDisabled();
+  expect(await missingPlaceholders(admin)).toEqual([]);
   await dialog.getByLabel("Reason").fill("Marked by mistake");
   await dialog.getByRole("button", { name: "Remove Attendance" }).click();
   await expect(admin.getByRole("status")).toContainText("Attendance removed");
-  await expect(admin.getByRole("row").filter({ hasText: "Raju Pandya" })).toHaveCount(0);
+  await expect(history.getByRole("listitem").filter({ hasText: "Raju Pandya" })).toHaveCount(0);
 
   const id = await memberId("2052");
   const [a] = await db`select status, cancel_reason from attendance where member_id = ${id} and event_day = 1`;
@@ -1488,6 +1525,8 @@ test("Admin can edit and delete members; history stays in the log", async () => 
 
   // The edit form: digits only, stops at 6, and says how many are missing.
   await admin.getByRole("row").filter({ hasText: "Suresh Shah" }).getByRole("button", { name: "Edit" }).click();
+  await expect(admin.getByRole("dialog").getByLabel("Name")).toBeVisible();
+  expect(await missingPlaceholders(admin)).toEqual([]);
   const idBox = admin.getByRole("dialog").getByLabel("Global Member ID");
   await idBox.fill("");
   await idBox.pressSequentially("30a1-0 0 99");

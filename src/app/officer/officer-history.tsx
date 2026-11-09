@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Hash, History, MapPin, Phone } from "lucide-react";
-import { Alert, Button, Card, CardHeader, EmptyState, Field, GenderBadge, MetaList, Pagination, PersonRow, Select, Skeleton, type SelectOption } from "@/components/ui";
+import { Hash, History, MapPin, Phone, Trash2 } from "lucide-react";
+import { RemoveAttendanceForm } from "@/components/remove-attendance";
+import { Alert, Button, Card, CardHeader, EmptyState, Field, GenderBadge, MetaList, Modal, Pagination, PersonRow, Select, Skeleton, useToast, type SelectOption } from "@/components/ui";
 import { api } from "@/lib/client-api";
 import { formatTime, type EventSession, type Gender } from "@/lib/shared";
 
@@ -28,9 +29,24 @@ const SCOPE_OPTIONS: SelectOption[] = [
 /**
  * A list rather than a table, as it sits in a side column on large screens and fills a phone on small
  * ones. `version` changes whenever the day's count does, so a new mark appears here by itself.
- * An officer sees everyone of their own gender; only Admin chooses between "me" and everyone.
+ * An officer sees everyone of their own gender; only Admin chooses between "me" and everyone, and
+ * only Admin can remove a mark made by mistake.
  */
-export function OfficerHistory({ event, version, initial, canChooseScope }: { event: EventSession; version: string; initial: HistoryPage | null; canChooseScope: boolean }) {
+export function OfficerHistory({
+  event,
+  version,
+  initial,
+  isAdmin,
+  onRemoved,
+}: {
+  event: EventSession;
+  version: string;
+  initial: HistoryPage | null;
+  isAdmin: boolean;
+  onRemoved?: () => void;
+}) {
+  const toast = useToast();
+  const [removing, setRemoving] = useState<HistoryRow | null>(null);
   const [scope, setScope] = useState("mine");
   const [page, setPage] = useState(1);
   const [data, setData] = useState<HistoryPage | null>(initial);
@@ -55,7 +71,7 @@ export function OfficerHistory({ event, version, initial, canChooseScope }: { ev
       <CardHeader
         title={<span className="inline-flex items-center gap-2"><History aria-hidden size={16} className="text-muted" />History{data ? ` (${data.total})` : ""}</span>}
         description={event.name}
-        actions={canChooseScope && (
+        actions={isAdmin && (
           <div className="w-full sm:w-48">
             <Field label="Show" htmlFor="history-scope">
               <Select id="history-scope" value={scope} options={SCOPE_OPTIONS} onChange={(v) => { setScope(v); setPage(1); }} />
@@ -87,7 +103,7 @@ export function OfficerHistory({ event, version, initial, canChooseScope }: { ev
               <PersonRow
                 name={r.name}
                 gender={r.gender}
-                nameBadge={canChooseScope && <GenderBadge gender={r.gender} />}
+                nameBadge={isAdmin && <GenderBadge gender={r.gender} />}
                 meta={
                   <MetaList
                     items={[
@@ -98,10 +114,17 @@ export function OfficerHistory({ event, version, initial, canChooseScope }: { ev
                   />
                 }
                 actions={
-                  <span className="flex flex-col items-end text-right text-sm">
-                    <span className="font-semibold">{formatTime(r.marked_at)}</span>
-                    <span className="text-xs text-muted">{r.is_mine ? "You" : r.marked_by}</span>
-                  </span>
+                  <>
+                    <span className="flex flex-col items-end text-right text-sm">
+                      <span className="font-semibold">{formatTime(r.marked_at)}</span>
+                      <span className="text-xs text-muted">{r.is_mine ? "You" : r.marked_by}</span>
+                    </span>
+                    {isAdmin && (
+                      <Button variant="ghost-danger" size="sm" icon={Trash2} aria-label={`Remove ${r.name}`} onClick={() => setRemoving(r)}>
+                        <span className="hidden sm:inline">Remove</span>
+                      </Button>
+                    )}
+                  </>
                 }
               />
             </li>
@@ -110,6 +133,26 @@ export function OfficerHistory({ event, version, initial, canChooseScope }: { ev
       )}
 
       {data && <Pagination page={page} pageSize={data.pageSize} total={data.total} onPage={setPage} />}
+
+      {isAdmin && (
+        <Modal open={removing !== null} onClose={() => setRemoving(null)} title="Remove attendance">
+          {removing && (
+            <RemoveAttendanceForm
+              key={removing.id}
+              attendanceId={removing.id}
+              name={removing.name}
+              eventName={event.name}
+              onClose={() => setRemoving(null)}
+              onDone={() => {
+                setRemoving(null);
+                toast("success", "Attendance removed.");
+                setRetryKey((k) => k + 1);
+                onRemoved?.();
+              }}
+            />
+          )}
+        </Modal>
+      )}
     </Card>
   );
 }

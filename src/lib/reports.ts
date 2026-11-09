@@ -5,7 +5,6 @@ import { getSql } from "./db";
 import { formatDate, formatDateTime, SOURCE_LABEL, type MemberSource } from "./shared";
 
 const IST = "Asia/Kolkata";
-export const PAGE_SIZE = 50;
 
 const filterSchema = z.object({
   event: z.enum(["all", "1", "2", "3"]).catch("all"),
@@ -50,18 +49,14 @@ export async function getSummary(f: ReportFilters) {
   const sql = getSql();
   const where = attendanceWhere(sql, f);
 
-  const memberFilter = () => {
-    let w = sql`m.created_source = 'quick_entry'`;
-    if (f.gender !== "all") w = sql`${w} and m.gender = ${f.gender}`;
-    if (f.center !== "all") w = sql`${w} and m.center = ${f.center}`;
-    if (f.officer !== "all") w = sql`${w} and m.created_by = ${f.officer}`;
-    return w;
-  };
-  let quickSelection = memberFilter();
-  if (f.event !== "all") quickSelection = sql`${quickSelection} and m.created_event_day = ${Number(f.event)}`;
-  if (f.date !== "all") quickSelection = sql`${quickSelection} and (m.created_at at time zone ${IST})::date = ${f.date}::date`;
+  // Everyone in the member list, whether present or not. Only the filters that describe a member apply:
+  // a day, a date or an officer is about attendance, so it doesn't change how many members there are.
+  let memberWhere = sql`true`;
+  if (f.gender !== "all") memberWhere = sql`${memberWhere} and m.gender = ${f.gender}`;
+  if (f.center !== "all") memberWhere = sql`${memberWhere} and m.center = ${f.center}`;
+  if (f.source !== "all") memberWhere = sql`${memberWhere} and m.created_source = ${f.source}`;
 
-  const [[totals], byDay, [quick], byOfficer] = await Promise.all([
+  const [[totals], byDay, [members], byOfficer] = await Promise.all([
     sql`
       select
         count(*) filter (where m.gender = 'Male')::int as male,
@@ -88,10 +83,12 @@ export async function getSummary(f: ReportFilters) {
       order by a.event_day, 3`,
     sql`
       select
-        count(*) filter (where (m.created_at at time zone ${IST})::date = (now() at time zone ${IST})::date)::int as today,
-        count(*) filter (where ${quickSelection})::int as in_selection
+        count(*)::int as total,
+        count(*) filter (where m.gender = 'Male')::int as male,
+        count(*) filter (where m.gender = 'Female')::int as female,
+        count(*) filter (where m.created_source = 'quick_entry')::int as quick
       from members m
-      where ${memberFilter()}`,
+      where ${memberWhere}`,
     // Every approved officer is listed even with nothing marked yet, along with anyone whose
     // marks are in the report, such as an officer whose access was later removed.
     sql`
@@ -116,8 +113,12 @@ export async function getSummary(f: ReportFilters) {
     uniqueMembers: totals.unique_members as number,
     fromExcel: totals.from_excel as number,
     fromQuickEntry: totals.from_quick_entry as number,
-    quickEntryToday: quick.today as number,
-    quickEntryInSelection: quick.in_selection as number,
+    members: {
+      total: members.total as number,
+      male: members.male as number,
+      female: members.female as number,
+      quick: members.quick as number,
+    },
     byOfficer: byOfficer.map((r) => ({
       id: r.id as string,
       name: r.name as string,
@@ -132,21 +133,6 @@ export async function getSummary(f: ReportFilters) {
       total: r.total as number,
     })),
   };
-}
-
-export async function getRecords(f: ReportFilters, page: number) {
-  const sql = getSql();
-  return sql`
-    select a.id, a.event_day, e.name as event_name, a.marked_at, a.status,
-           u.display_name as marked_by,
-           m.id as member_id, m.global_member_id, m.name, m.mobile, m.gender, m.center, m.created_source
-    from attendance a
-    join members m on m.id = a.member_id
-    join event_sessions e on e.event_day = a.event_day
-    join app_users u on u.id = a.marked_by
-    where ${attendanceWhere(sql, f)}
-    order by a.marked_at desc, a.id desc
-    limit ${PAGE_SIZE} offset ${(page - 1) * PAGE_SIZE}`;
 }
 
 export async function getFilterOptions() {
@@ -169,9 +155,9 @@ export async function getFilterOptions() {
   };
 }
 
-export async function getReport(filters: ReportFilters, page: number) {
-  const [summary, records, options] = await Promise.all([getSummary(filters), getRecords(filters, page), getFilterOptions()]);
-  return { summary, records, options, page, pageSize: PAGE_SIZE };
+export async function getReport(filters: ReportFilters) {
+  const [summary, options] = await Promise.all([getSummary(filters), getFilterOptions()]);
+  return { summary, options };
 }
 
 function describeFilters(f: ReportFilters, officerName: string) {

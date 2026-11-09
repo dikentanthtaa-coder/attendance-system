@@ -35,10 +35,10 @@ export function ChangePasswordForm() {
       <p className="mt-0.5 mb-5 text-muted">Admin reset your password. Choose your own to continue.</p>
       <form onSubmit={submit} className="flex flex-col gap-4">
         <Field label="New Password" hint={`(at least ${MIN_PASSWORD_LENGTH} characters)`} htmlFor="new-password">
-          <PasswordInput id="new-password" required autoFocus minLength={MIN_PASSWORD_LENGTH} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <PasswordInput id="new-password" placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`} required autoFocus minLength={MIN_PASSWORD_LENGTH} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
         <Field label="Confirm Password" htmlFor="confirm-password">
-          <PasswordInput id="confirm-password" required autoComplete="new-password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+          <PasswordInput id="confirm-password" placeholder="Type the same password again" required autoComplete="new-password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
         </Field>
         {mismatch && <p className="-mt-2 text-sm font-medium text-danger">The two passwords don&apos;t match yet.</p>}
         {error && <Alert tone="danger" title={error} />}

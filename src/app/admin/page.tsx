@@ -10,7 +10,7 @@ export default async function AdminPage() {
   // Loaded here so the numbers arrive with the page, instead of placeholders that fill in after.
   const [rawEvents, report] = await Promise.all([
     listEvents(),
-    getReport(parseFilters(new URLSearchParams()), 1),
+    getReport(parseFilters(new URLSearchParams())),
   ]);
   const events: EventSession[] = JSON.parse(JSON.stringify(rawEvents));
   return (

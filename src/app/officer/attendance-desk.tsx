@@ -121,7 +121,8 @@ export function AttendanceDesk({ initial, officerGender = null }: { initial: Des
             event={selected}
             version={String(count.present)}
             initial={selectedDay === initial.day ? initial.history : null}
-            canChooseScope={officerGender === null}
+            isAdmin={officerGender === null}
+            onRemoved={() => refreshEvents().catch(() => {})}
           />
         </div>
       </div>

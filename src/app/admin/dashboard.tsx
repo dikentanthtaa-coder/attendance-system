@@ -1,33 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Clock, Download, FileUp, Hash, History, Inbox, MapPin, Mars, Phone, Scale, SlidersHorizontal, Trash2, UserPlus, UserRoundCheck, UsersRound, Venus, X } from "lucide-react";
-import {
-  Alert,
-  Button,
-  Card,
-  CardHeader,
-  DataTable,
-  EmptyState,
-  Field,
-  GenderBadge,
-  LinkButton,
-  MetaList,
-  Modal,
-  ModalActions,
-  Pagination,
-  PersonCell,
-  PersonRow,
-  Select,
-  SourceBadge,
-  StatCard,
-  TextInput,
-  useToast,
-  type Column,
-  type SelectOption,
-} from "@/components/ui";
+import { Download, FileUp, Inbox, Mars, Scale, SlidersHorizontal, UserPlus, UsersRound, Venus, X } from "lucide-react";
+import { Alert, Button, Card, CardHeader, EmptyState, Field, LinkButton, Select, StatCard, type SelectOption } from "@/components/ui";
 import { api } from "@/lib/client-api";
-import { formatDate, formatDateTime, formatTime, SOURCE_LABEL, type Gender, type MemberSource } from "@/lib/shared";
+import { formatDate, formatTime, SOURCE_LABEL } from "@/lib/shared";
 
 type Filters = { event: string; date: string; gender: string; center: string; source: string; officer: string };
 
@@ -44,31 +21,15 @@ type Summary = {
   uniqueMembers: number;
   fromExcel: number;
   fromQuickEntry: number;
-  quickEntryToday: number;
-  quickEntryInSelection: number;
+  /** Everyone in the member list for these filters, present or not. */
+  members: { total: number; male: number; female: number; quick: number };
   byDay: DayRow[];
   byOfficer: OfficerRow[];
 };
 
-type AttendanceRecord = {
-  id: number;
-  event_name: string;
-  marked_at: string;
-  marked_by: string;
-  global_member_id: string | null;
-  name: string;
-  mobile: string | null;
-  gender: Gender;
-  center: string;
-  created_source: MemberSource;
-};
-
 type Report = {
   summary: Summary;
-  records: AttendanceRecord[];
   options: { centers: string[]; dates: string[]; officers: { id: string; name: string }[] };
-  page: number;
-  pageSize: number;
 };
 
 const REFRESH_MS = 10000;
@@ -92,30 +53,26 @@ const SOURCE_OPTIONS: SelectOption[] = [
   { value: "quick_entry", label: SOURCE_LABEL.quick_entry },
 ];
 
-const shortEvent = (r: AttendanceRecord) => r.event_name.replace("Gyansatr ", "");
 
 export function Dashboard({ initial, generatedAt }: { initial: Report; generatedAt: string }) {
-  const toast = useToast();
   const [filters, setFilters] = useState(NO_FILTERS);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [page, setPage] = useState(1);
   const [report, setReport] = useState<Report>(initial);
   const [updatedAt, setUpdatedAt] = useState<Date>(() => new Date(generatedAt));
   const [error, setError] = useState("");
-  const [removing, setRemoving] = useState<AttendanceRecord | null>(null);
 
   const query = useMemo(() => new URLSearchParams(filters).toString(), [filters]);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const data = await api<Report>(`/api/admin/report?${query}&page=${page}`, { signal });
+      const data = await api<Report>(`/api/admin/report?${query}`, { signal });
       setReport(data);
       setUpdatedAt(new Date());
       setError("");
     } catch (err) {
       if ((err as Error).name !== "AbortError") setError((err as Error).message);
     }
-  }, [query, page]);
+  }, [query]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -131,10 +88,7 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
     };
   }, [load]);
 
-  const setFilter = (key: keyof Filters, value: string) => {
-    setFilters((f) => ({ ...f, [key]: value }));
-    setPage(1);
-  };
+  const setFilter = (key: keyof Filters, value: string) => setFilters((f) => ({ ...f, [key]: value }));
 
   const activeFilters = Object.values(filters).filter((v) => v !== "all").length;
   const s = report.summary;
@@ -176,11 +130,12 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
             options={[{ value: "all", label: "All Officers" }, ...report.options.officers.map((o) => ({ value: o.id, label: o.name }))]}
           />
         </div>
-        {activeFilters > 0 && (
-          <div className="mt-3 flex justify-end">
-            <Button variant="ghost" size="sm" icon={X} onClick={() => { setFilters(NO_FILTERS); setPage(1); }}>Clear filters</Button>
-          </div>
-        )}
+        {/* The export follows these filters, so it sits with them. */}
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+          <p className="mr-auto text-sm text-muted">Updated {formatTime(updatedAt)}</p>
+          {activeFilters > 0 && <Button variant="ghost" size="sm" icon={X} onClick={() => setFilters(NO_FILTERS)}>Clear filters</Button>}
+          <div className="hidden md:block"><ExportLink query={query} /></div>
+        </div>
       </Card>
 
       {error && (
@@ -202,43 +157,8 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
       )}
 
       <SummaryCards s={s} />
-      <ByOfficer
-        s={s}
-        onView={(id) => {
-          setFilter("officer", id);
-          document.getElementById("attendance-records")?.scrollIntoView({ behavior: "smooth" });
-        }}
-      />
+      <ByOfficer s={s} />
       <DayWise s={s} gender={filters.gender} />
-
-      <Card id="attendance-records" aria-label="Attendance records" className="scroll-mt-20 overflow-hidden">
-        <CardHeader
-          title="Attendance report"
-          description={
-            <>
-              {s.total} records: {s.fromExcel} {SOURCE_LABEL.excel_import}, {s.fromQuickEntry} {SOURCE_LABEL.quick_entry}. Updated {formatTime(updatedAt)}
-            </>
-          }
-          actions={<div className="hidden md:block"><ExportLink query={query} /></div>}
-        />
-        <RecordsTable records={report.records} onRemove={setRemoving} />
-        <Pagination page={page} pageSize={report.pageSize} total={s.total} onPage={setPage} />
-      </Card>
-
-      <Modal open={removing !== null} onClose={() => setRemoving(null)} title="Remove attendance">
-        {removing && (
-          <RemoveForm
-            key={removing.id}
-            record={removing}
-            onClose={() => setRemoving(null)}
-            onDone={() => {
-              setRemoving(null);
-              toast("success", "Attendance removed.");
-              load();
-            }}
-          />
-        )}
-      </Modal>
     </>
   );
 }
@@ -257,13 +177,23 @@ function ExportLink({ query }: { query: string }) {
   return <LinkButton native href={`/api/admin/report/export?${query}`} icon={Download}>Export to Excel</LinkButton>;
 }
 
+/** Each card: the total in the member list first, then how many of them are present for these filters. */
 function SummaryCards({ s }: { s: Summary }) {
   const difference = s.male - s.female;
   return (
     <section aria-label="Summary" className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-5">
-      <StatCard tone="hero" icon={UsersRound} label="Combined attendees" value={s.total} note={`${s.uniqueMembers} unique members`} testId="stat-total" className="col-span-2 md:col-span-4 lg:col-span-1" />
-      <StatCard tone="male" icon={Mars} label="Male" value={s.male} testId="stat-male" />
-      <StatCard tone="female" icon={Venus} label="Female" value={s.female} testId="stat-female" />
+      <StatCard
+        tone="hero"
+        icon={UsersRound}
+        label="Total Users"
+        value={s.members.total}
+        testId="stat-members"
+        secondary={{ label: "Combined attendees", value: s.total, testId: "stat-total" }}
+        note={`${s.uniqueMembers} unique members`}
+        className="col-span-2 md:col-span-4 lg:col-span-1"
+      />
+      <StatCard tone="male" icon={Mars} label="Total Male" value={s.members.male} testId="stat-members-male" secondary={{ label: "Present Male", value: s.male, testId: "stat-male" }} />
+      <StatCard tone="female" icon={Venus} label="Total Female" value={s.members.female} testId="stat-members-female" secondary={{ label: "Present Female", value: s.female, testId: "stat-female" }} />
       <StatCard
         icon={Scale}
         label="Male minus Female"
@@ -271,13 +201,20 @@ function SummaryCards({ s }: { s: Summary }) {
         note={difference === 0 ? "Equal" : `${Math.abs(difference)} more ${difference > 0 ? "male" : "female"} attendees`}
         testId="stat-difference"
       />
-      <StatCard tone="warn" icon={UserPlus} label="Quick Entry today" value={s.quickEntryToday} note={`${s.quickEntryInSelection} in these filters`} testId="stat-quick" />
+      <StatCard
+        tone="warn"
+        icon={UserPlus}
+        label={`Total ${SOURCE_LABEL.quick_entry}s`}
+        value={s.members.quick}
+        testId="stat-members-quick"
+        secondary={{ label: `Present ${SOURCE_LABEL.quick_entry}s`, value: s.fromQuickEntry, testId: "stat-quick" }}
+      />
     </section>
   );
 }
 
 /** Each officer's own total, with the entire total underneath. It follows the filters above. */
-function ByOfficer({ s, onView }: { s: Summary; onView: (id: string) => void }) {
+function ByOfficer({ s }: { s: Summary }) {
   if (s.byOfficer.length === 0) return null;
   return (
     <Card aria-label="Attendance by officer" className="overflow-hidden">
@@ -286,28 +223,21 @@ function ByOfficer({ s, onView }: { s: Summary; onView: (id: string) => void }) 
         <thead>
           <tr className="bg-canvas text-left text-xs text-muted">
             <th scope="col" className="py-2.5 pr-3 pl-4 font-semibold md:pl-5">Officer</th>
-            <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Present</th>
-            <th scope="col" aria-label="Actions" className="pr-2 md:pr-3" />
+            <th scope="col" className="py-2.5 pr-4 text-right font-semibold md:pr-5">Present</th>
           </tr>
         </thead>
         <tbody>
           {s.byOfficer.map((o) => (
             <tr key={o.id} className="border-t border-rule">
-              <td className="py-1.5 pr-3 pl-4 font-semibold md:pl-5">{o.name}</td>
-              <td className="py-1.5 pr-3 text-right font-bold">{o.present}</td>
-              <td className="py-1 pr-2 text-right md:pr-3">
-                <Button variant="ghost" size="sm" icon={History} aria-label={`View history for ${o.name}`} onClick={() => onView(o.id)}>
-                  <span className="hidden sm:inline">History</span>
-                </Button>
-              </td>
+              <td className="py-2.5 pr-3 pl-4 font-semibold md:pl-5">{o.name}</td>
+              <td className="py-2.5 pr-4 text-right font-bold md:pr-5">{o.present}</td>
             </tr>
           ))}
         </tbody>
         <tfoot>
           <tr className="border-t-2 border-line bg-canvas font-bold" data-testid="officer-totals">
             <th scope="row" className="py-2.5 pr-3 pl-4 text-left md:pl-5">All officers</th>
-            <td className="py-2.5 pr-3 text-right">{s.total}</td>
-            <td />
+            <td className="py-2.5 pr-4 text-right md:pr-5">{s.total}</td>
           </tr>
         </tfoot>
       </table>
@@ -393,104 +323,6 @@ function BarPart({ row, value, label, className }: { row: DayRow; value: number;
       <div role="tooltip" className="pointer-events-none absolute bottom-full left-0 z-10 hidden rounded-control bg-ink px-2 py-1 text-xs whitespace-nowrap text-white shadow-lg group-hover:block">
         {row.eventName}: {value} {label} of {row.total}
       </div>
-    </div>
-  );
-}
-
-function RecordsTable({ records, onRemove }: { records: AttendanceRecord[]; onRemove: (record: AttendanceRecord) => void }) {
-  if (records.length === 0) {
-    return <EmptyState icon={UserRoundCheck} titleAs="p" title="No attendance records for these filters" description="They appear here as officers mark people present." />;
-  }
-
-  const remove = (r: AttendanceRecord) => (
-    <Button variant="ghost-danger" size="sm" icon={Trash2} onClick={() => onRemove(r)}>Remove</Button>
-  );
-
-  const columns: Column<AttendanceRecord>[] = [
-    // ID and mobile share a column, so the whole table fits on a laptop without scrolling sideways.
-    { key: "name", header: "Name", cell: (r) => <PersonCell name={r.name} gender={r.gender} detail={[r.global_member_id, r.mobile].filter(Boolean).join(" · ")} /> },
-    { key: "gender", header: "Gender", cell: (r) => <GenderBadge gender={r.gender} /> },
-    { key: "center", header: "Center", cell: (r) => <span className="text-muted">{r.center}</span> },
-    {
-      key: "event",
-      header: "Event and time",
-      nowrap: true,
-      cell: (r) => (
-        <>
-          <span className="block font-medium">{shortEvent(r)}</span>
-          <span className="block text-xs text-muted">{formatDateTime(r.marked_at)}</span>
-        </>
-      ),
-    },
-    { key: "by", header: "Marked by", cell: (r) => <span className="text-muted">{r.marked_by}</span> },
-    { key: "source", header: "Source", cell: (r) => <SourceBadge source={r.created_source} /> },
-    { key: "actions", header: "Actions", hideHeader: true, align: "right", cell: remove },
-  ];
-
-  return (
-    <DataTable
-      rows={records}
-      columns={columns}
-      rowKey={(r) => r.id}
-      mobileRow={(r) => (
-        <PersonRow
-          name={r.name}
-          gender={r.gender}
-          meta={
-            <MetaList
-              items={[
-                r.global_member_id ? { icon: Hash, label: r.global_member_id, strong: true } : null,
-                r.mobile ? { icon: Phone, label: r.mobile } : null,
-                { icon: MapPin, label: r.center },
-                { icon: Clock, label: `${shortEvent(r)}, ${formatDateTime(r.marked_at)}` },
-                { icon: UserRoundCheck, label: r.marked_by },
-              ]}
-            />
-          }
-          footer={
-            <>
-              <GenderBadge gender={r.gender} />
-              <SourceBadge source={r.created_source} />
-              <span className="ml-auto">{remove(r)}</span>
-            </>
-          }
-        />
-      )}
-    />
-  );
-}
-
-/** Only Admin reaches this, and every removal needs a reason. Officers can't undo attendance. */
-function RemoveForm({ record, onClose, onDone }: { record: AttendanceRecord; onClose: () => void; onDone: () => void }) {
-  const [reason, setReason] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit() {
-    setBusy(true);
-    setError("");
-    try {
-      await api(`/api/admin/attendance/${record.id}/cancel`, { json: { reason } });
-      onDone();
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-4">
-      <p>
-        Remove <strong className="font-semibold">{record.name}</strong> from <strong className="font-semibold">{record.event_name}</strong>? If the event is still active, they can be marked again.
-      </p>
-      <Field label="Reason" htmlFor="remove-reason">
-        <TextInput id="remove-reason" autoFocus maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} />
-      </Field>
-      {error && <Alert tone="danger" title={error} />}
-      <ModalActions>
-        <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={submit}>{busy ? "Removing…" : "Remove Attendance"}</Button>
-      </ModalActions>
     </div>
   );
 }
