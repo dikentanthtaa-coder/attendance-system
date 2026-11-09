@@ -1,8 +1,11 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import ExcelJS from "exceljs";
 import { SignJWT } from "jose";
 import postgres from "postgres";
 import { TEST_DB } from "../playwright.config";
+import { api, ClientApiError } from "../src/lib/client-api";
 import { TEST_PASSWORD } from "./global-setup";
 
 const HEADER = ["No", "MemberID", "Name", "Mo.no.", "Gender", "Center"];
@@ -360,8 +363,8 @@ test("permissions are enforced on the server for every role", async ({ request }
   expect((await upload(officerApi, await xlsx([]))).status()).toBe(403);
   expect((await officerApi.delete("/api/admin/members/1")).status()).toBe(403);
   expect((await officerApi.post("/api/admin/attendance/1/correct", { data: { action: "remove", reason: "x" } })).status()).toBe(403);
-  // Admin on officer endpoints
-  expect((await adminApi.get("/api/officer/search?day=1&q=a")).status()).toBe(403);
+  // Admin can use the marking screen too, so these are open to Admin.
+  expect((await adminApi.get("/api/officer/search?day=1&q=a")).status()).toBe(200);
   // Officer pages redirect away from admin
   await officer.goto("/admin");
   await expect(officer).toHaveURL(/\/officer$/);
@@ -486,7 +489,7 @@ test("mark attendance through the UI on a phone, then Already Present", async ()
   await officer.goto("/officer");
   const box = officer.getByLabel(/Search by Member ID/);
   await box.fill("300");
-  const row = officer.getByRole("listitem").filter({ hasText: "Suresh Shah" });
+  const row = officer.getByRole("region", { name: "Search results" }).getByRole("listitem").filter({ hasText: "Suresh Shah" });
   await expect(row).toContainText("9876500004");
   await expect(row).toContainText("Bharuch");
   await row.getByRole("button", { name: "Mark Present" }).click();
@@ -499,7 +502,7 @@ test("mark attendance through the UI on a phone, then Already Present", async ()
   expect(box2.y + box2.height).toBeLessThan(844 * 0.5);
 
   await box.fill("3001");
-  await expect(officer.getByRole("listitem").filter({ hasText: "Suresh Shah" })).toContainText("Already Present");
+  await expect(officer.getByRole("region", { name: "Search results" }).getByRole("listitem").filter({ hasText: "Suresh Shah" })).toContainText("Already Present");
 
   const [record] = await db`
     select a.event_day, a.marked_at, u.username, a.status from attendance a
@@ -544,7 +547,7 @@ test("absent: an officer can mark it, late arrivals can become present, but pres
   await officer.goto("/officer");
   const box = officer.getByLabel(/Search by Member ID/);
   await box.fill("4001");
-  const row = officer.getByRole("listitem").filter({ hasText: "Late Lalit" });
+  const row = officer.getByRole("region", { name: "Search results" }).getByRole("listitem").filter({ hasText: "Late Lalit" });
   await expect(row.getByRole("button", { name: "Mark Present" })).toBeVisible();
   await officer.screenshot({ path: "test-results/screens/officer-mark-phone.png" });
   await row.getByRole("button", { name: "Mark Absent" }).click();
@@ -681,6 +684,212 @@ test("Quick Entry on the server: gender required, confirmation required, Other c
   expect(linked[0]).toMatchObject({ global_member_id: "7001", created_source: "quick_entry" });
 });
 
+test("totals and history: each officer sees their own and everyone's, and a new mark appears by itself", async () => {
+  const counts = async (api: APIRequestContext) => (await (await api.get("/api/events")).json()).counts["1"];
+  const dbCount = async (status: string, by?: string) => (await db`
+    select count(*)::int as n from attendance a join app_users u on u.id = a.marked_by
+    where a.event_day = 1 and a.status = ${status} ${by ? db`and u.email = ${by}` : db``}`)[0].n as number;
+
+  // On the server: my figures are only mine, and the totals are the same for everybody.
+  const mine = await counts(officerApi);
+  const other = await counts(officer2Api);
+  expect(mine).toEqual({
+    present: await dbCount("present"), absent: await dbCount("absent"),
+    myPresent: await dbCount("present", OFFICER.email), myAbsent: await dbCount("absent", OFFICER.email),
+  });
+  expect(other.myPresent).toBe(await dbCount("present", OFFICER2.email));
+  expect([other.present, other.absent]).toEqual([mine.present, mine.absent]);
+  expect(mine.myPresent + other.myPresent).toBe(mine.present);
+
+  // On the screen, with a person marked by the other officer to tell the two views apart.
+  const [{ id: newPerson }] = await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('4004', 'History Hari', '9876540004', 'Male', 'Pune', 'excel_import') returning id`;
+  const [{ id: otherPerson }] = await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('4005', 'Others Om', '9876540005', 'Male', 'Pune', 'excel_import') returning id`;
+  await mark(officer2Api, otherPerson, 1);
+
+  await officer.goto("/officer");
+  await expect(officer.getByTestId("stat-my-present")).toHaveText(String(mine.myPresent));
+  await expect(officer.getByTestId("stat-my-absent")).toHaveText(String(mine.myAbsent));
+  await expect(officer.getByTestId("stat-all-present")).toHaveText(String(mine.present + 1));
+  await expect(officer.getByTestId("stat-all-absent")).toHaveText(String(mine.absent));
+
+  const history = officer.getByRole("region", { name: "Attendance history" });
+  await expect(history).toContainText("Suresh Shah");
+  await expect(history).not.toContainText("Others Om");
+  await expect(history).not.toContainText("History Hari");
+
+  // Marking someone puts them in the table below, and updates the figures, without a reload.
+  await officer.getByLabel(/Search by Member ID/).fill("4004");
+  await officer.getByRole("region", { name: "Search results" }).getByRole("button", { name: "Mark Present" }).click();
+  await expect(officer.getByRole("status")).toContainText("Present: History Hari");
+  await expect(officer.getByTestId("stat-my-present")).toHaveText(String(mine.myPresent + 1));
+  await expect(officer.getByTestId("stat-all-present")).toHaveText(String(mine.present + 2));
+  const newest = history.getByRole("listitem").first();
+  await expect(newest).toContainText("History Hari");
+  await expect(newest).toContainText("Present");
+  await expect(newest).toContainText("You");
+  await officer.screenshot({ path: "test-results/screens/officer-history-phone.png", fullPage: true });
+
+  // "All officers" also shows who marked each person.
+  await officer.getByRole("combobox", { name: "Show" }).click();
+  await officer.getByRole("option", { name: "All officers" }).click();
+  const others = history.getByRole("listitem").filter({ hasText: "Others Om" });
+  await expect(others).toContainText("Bharat Joshi");
+
+  // Marks made by another officer arrive by themselves, with the next refresh.
+  const [{ id: lastPerson }] = await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('4006', 'Polled Puja', '9876540006', 'Female', 'Pune', 'excel_import') returning id`;
+  await mark(officer2Api, lastPerson, 1, "absent");
+  await expect(history).toContainText("Polled Puja", { timeout: 8000 });
+
+  // Removed by Admin: gone from the history. Only signed-in officers can read it.
+  const [record] = await db`select id from attendance where member_id = ${lastPerson}`;
+  expect((await adminApi.post(`/api/admin/attendance/${record.id}/correct`, { data: { action: "remove", reason: "test" } })).status()).toBe(200);
+  await expect(history).not.toContainText("Polled Puja", { timeout: 8000 });
+  const res = await officerApi.get("/api/officer/history?day=1&scope=all");
+  expect((await res.json()).records.map((r: { name: string }) => r.name)).not.toContain("Polled Puja");
+  expect((await adminApi.get("/api/officer/history?day=1")).status()).toBe(200);
+  expect((await officerApi.get("/api/officer/history?day=9")).status()).toBe(400);
+
+  // Admin: every officer's own total, the entire total, and one click to their history.
+  await admin.goto("/admin");
+  const table = admin.getByRole("region", { name: "Attendance by officer" });
+  const officerRow = table.getByRole("row").filter({ hasText: OFFICER_NAME });
+  const presentBy = async (email: string) => dbTotal("present", email);
+  const dbTotal = async (status: string, email?: string) => (await db`
+    select count(*)::int as n from attendance a join app_users u on u.id = a.marked_by
+    where a.status = ${status} ${email ? db`and u.email = ${email}` : db``}`)[0].n as number;
+  await expect(officerRow.getByRole("cell").nth(1)).toHaveText(String(await presentBy(OFFICER.email)));
+  await expect(officerRow.getByRole("cell").nth(2)).toHaveText(String(await dbTotal("absent", OFFICER.email)));
+  await expect(admin.getByTestId("officer-totals")).toContainText(String(await dbTotal("present")));
+  await admin.screenshot({ path: "test-results/screens/admin-by-officer.png", fullPage: true });
+
+  // Approved officers with nothing marked yet are listed too.
+  await expect(table.getByRole("row").filter({ hasText: "Dev Rana" })).toContainText("0");
+
+  await table.getByRole("button", { name: "View history for Bharat Joshi" }).click();
+  const records = admin.getByRole("region", { name: "Attendance records" });
+  await expect(records).toContainText("Others Om");
+  await expect(records).not.toContainText("Suresh Shah");
+  await expect(table.getByRole("row").filter({ hasText: OFFICER_NAME })).toHaveCount(0);
+  await expect(admin.getByTestId("stat-total")).toHaveText(String(await presentBy(OFFICER2.email)));
+
+  // The export follows the same filter, and carries the officer-wise totals.
+  const [download] = await Promise.all([admin.waitForEvent("download"), admin.getByRole("link", { name: "Export to Excel" }).click()]);
+  expect(download.suggestedFilename()).toBe("attendance_all-days_bharat-joshi.xlsx");
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(await download.path());
+  const names = new Set<string>();
+  wb.getWorksheet("Attendance")!.eachRow((row, n) => { if (n > 1) names.add(String(row.getCell(9).value)); });
+  expect([...names]).toEqual(["Bharat Joshi"]);
+  const summaryText = JSON.stringify(wb.getWorksheet("Summary")!.getSheetValues());
+  expect(summaryText).toContain("Officer-wise");
+  expect(summaryText).toContain("All officers");
+
+  await admin.getByRole("button", { name: "Clear filters" }).click();
+  await expect(records).toContainText("Suresh Shah");
+  void newPerson;
+});
+
+test("Present and Absent are offered without searching, for officers and for Admin", async () => {
+  const add = async (id: string, name: string, mobile: string) => {
+    await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values (${id}, ${name}, ${mobile}, 'Female', 'Vapi', 'excel_import')`;
+    return memberId(id);
+  };
+  const aaru = await add("5001", "Aaru First", "9876550001");
+  await add("5002", "Aaditi Second", "9876550002");
+  await add("5003", "Aarohi Third", "9876550003");
+  const statusOf = async (id: number) => (await db`select status from attendance where member_id = ${id} and event_day = 1`)[0]?.status;
+
+  // Officer: the list is there on arrival, with nothing typed, and leaves out anyone already marked.
+  await officer.goto("/officer");
+  const list = officer.getByRole("region", { name: "Not marked yet" });
+  const row = list.getByRole("listitem").filter({ hasText: "Aaru First" });
+  await expect(row.getByRole("button", { name: "Mark Present" })).toBeVisible();
+  await expect(row.getByRole("button", { name: "Mark Absent" })).toBeVisible();
+  await expect(list).not.toContainText("Suresh Shah");
+  await officer.screenshot({ path: "test-results/screens/officer-not-marked-phone.png", fullPage: true });
+
+  const expected = async () => (await db`
+    select count(*)::int as n from members m where not exists (
+      select 1 from attendance a where a.member_id = m.id and a.event_day = 1 and a.status in ('present', 'absent'))`)[0].n as number;
+  await expect(list.getByRole("heading")).toContainText(`(${await expected()})`);
+
+  await row.getByRole("button", { name: "Mark Absent" }).click();
+  await expect(officer.getByRole("status")).toContainText("Absent: Aaru First");
+  await expect(row).toHaveCount(0);
+  expect(await statusOf(aaru)).toBe("absent");
+  await expect(list.getByRole("heading")).toContainText(`(${await expected()})`);
+  await expect(officer.getByRole("region", { name: "Attendance history" })).toContainText("Aaru First");
+
+  // Typing swaps the list for the search results.
+  await officer.getByLabel(/Search by Member ID/).fill("5002");
+  await expect(officer.getByRole("region", { name: "Search results" })).toContainText("Aaditi Second");
+  await expect(list).toHaveCount(0);
+  await officer.getByLabel(/Search by Member ID/).fill("");
+  await expect(list).toBeVisible();
+
+  // Admin: a tab and a shortcut to the same screen, on which the same rules apply.
+  await admin.goto("/admin");
+  await admin.getByRole("button", { name: "Mark Attendance" }).or(admin.getByRole("main").getByRole("link", { name: "Mark Attendance" })).click();
+  await admin.waitForURL("**/admin/mark");
+  await expect(admin.getByRole("heading", { name: /^Marking Gyansatr Day/ })).toHaveCount(1);
+  const adminList = admin.getByRole("region", { name: "Not marked yet" });
+  await adminList.getByRole("listitem").filter({ hasText: "Aaditi Second" }).getByRole("button", { name: "Mark Present" }).click();
+  await expect(admin.getByRole("status")).toContainText("Present: Aaditi Second");
+  await admin.screenshot({ path: "test-results/screens/admin-mark.png", fullPage: true });
+  const [marked] = await db`select a.status, u.username from attendance a join app_users u on u.id = a.marked_by where a.member_id = ${await memberId("5002")} and a.event_day = 1`;
+  expect(marked).toMatchObject({ status: "present", username: "admin" });
+  await admin.getByLabel(/Search by Member ID/).fill("5003");
+  await admin.getByRole("region", { name: "Search results" }).getByRole("button", { name: "Mark Absent" }).click();
+  await expect(admin.getByRole("status")).toContainText("Absent: Aarohi Third");
+  const adminHistory = admin.getByRole("region", { name: "Attendance history" });
+  await expect(adminHistory).toContainText("Aaditi Second");
+  await expect(adminHistory.getByRole("row").filter({ hasText: "Aaditi Second" })).toContainText("You");
+
+  // It counts for Admin in the reports, so the officers' totals still add up to the whole.
+  await admin.goto("/admin");
+  const table = admin.getByRole("region", { name: "Attendance by officer" });
+  await expect(table.getByRole("row").filter({ hasText: /^Admin/ }).getByRole("cell").nth(1)).toHaveText("1");
+  const cell = async (row: number, col: number) => Number(await table.locator("tbody tr").nth(row).locator("td").nth(col).textContent());
+  const rows = await table.locator("tbody tr").count();
+  let present = 0;
+  for (let i = 0; i < rows; i++) present += await cell(i, 1);
+  expect(present).toBe((await db`select count(*)::int as n from attendance where status = 'present'`)[0].n);
+
+  // The screen isn't open to anyone else, and marking still needs the day to be running.
+  expect((await officer.goto("/admin/mark"))?.url()).toMatch(/\/officer$/);
+  await expect(officer).toHaveURL(/\/officer$/);
+});
+
+test("pages arrive with their numbers already in them, not placeholders to fill in", async () => {
+  // Read the page as first sent by the server, before any of its scripts have run.
+  const html = async (api: APIRequestContext, path: string) => {
+    const res = await api.get(path);
+    expect(res.status()).toBe(200);
+    return res.text();
+  };
+  const dashboard = await html(adminApi, "/admin");
+  expect(dashboard).not.toContain("animate-pulse");
+  expect(dashboard).toContain('data-testid="stat-total"');
+  const total = (await db`select count(*)::int as n from attendance where status = 'present'`)[0].n;
+  expect(dashboard).toMatch(new RegExp(`data-testid="stat-total"[^>]*>${total}<`));
+  expect(dashboard).toContain("Attendance report");
+
+  const members = await html(adminApi, "/admin/members");
+  expect(members).not.toContain("animate-pulse");
+  expect(members).toContain("Suresh Shah");
+
+  const officers = await html(adminApi, "/admin/officers");
+  expect(officers).not.toContain("animate-pulse");
+  expect(officers).toContain(OFFICER_NAME);
+
+  for (const [api, path] of [[officerApi, "/officer"], [adminApi, "/admin/mark"]] as const) {
+    const desk = await html(api, path);
+    expect(desk).not.toContain("animate-pulse");
+    expect(desk).toContain("Not marked yet");
+    expect(desk).toContain('data-testid="stat-my-present"');
+  }
+});
+
 test("ending the event stops marking at once, and the officer's screen locks by itself", async () => {
   await officer.goto("/officer");
   await expect(officer.getByLabel(/Search by Member ID/)).toBeVisible();
@@ -698,6 +907,8 @@ test("ending the event stops marking at once, and the officer's screen locks by 
 
   await expect(officer.getByLabel(/Search by Member ID/)).toHaveCount(0, { timeout: 8000 });
   await expect(officer.getByText("This event has ended")).toBeVisible();
+  // The day's totals and history stay readable after it ends.
+  await expect(officer.getByRole("region", { name: "Attendance history" })).toContainText("Suresh Shah");
 });
 
 test("each day's attendance is separate, and the officer follows the newly active day", async () => {
@@ -972,7 +1183,7 @@ test("every important activity is in the audit log with user and time", async ()
 
   // Recorded for the database only: there is no screen or API that shows it.
   await admin.goto("/admin");
-  await expect(admin.getByRole("navigation", { name: "Admin" }).getByRole("link")).toHaveText(["Dashboard", "Members", "Officers"]);
+  await expect(admin.getByRole("navigation", { name: "Admin" }).getByRole("link")).toHaveText(["Dashboard", "Mark Attendance", "Members", "Officers"]);
   expect((await admin.goto("/admin/activity"))?.status()).toBe(404);
   expect((await officerApi.get("/api/admin/audit")).status()).toBe(404);
 });
@@ -1125,6 +1336,53 @@ test("everything clickable shows a pointer, and disabled buttons show they're bl
   await fresh.goto("/login");
   expect(await wrongCursors(fresh)).toEqual([]);
   await fresh.close();
+});
+
+test("a request cancelled while its reply is arriving is reported as cancelled, not as an empty success", async () => {
+  // Filters and search cancel the previous request. Treated as a success, this crashed the screen.
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.write('{"records":[');
+    // The rest of the reply never comes, so the request is stuck part-way through its body.
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  const url = `http://127.0.0.1:${port}/`;
+
+  const controller = new AbortController();
+  const pending = api(url, { signal: controller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  controller.abort();
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  server.closeAllConnections();
+  server.close();
+
+  // A reply that isn't JSON, such as a proxy's error page sent as 200, is an error too.
+  const html = createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end("<h1>Bad gateway</h1>");
+  });
+  await new Promise<void>((resolve) => html.listen(0, "127.0.0.1", resolve));
+  await expect(api(`http://127.0.0.1:${(html.address() as AddressInfo).port}/`)).rejects.toBeInstanceOf(ClientApiError);
+  html.close();
+
+  // On the real screens: a bad reply shows the error with Retry, and the page survives.
+  await admin.goto("/admin");
+  await expect(admin.getByTestId("stat-total")).toBeVisible();
+  await admin.route("**/api/admin/report?**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Bad gateway</h1>" }));
+  await pick(admin, "Gender", "Male");
+  await expect(admin.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(admin.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await admin.unroute("**/api/admin/report?**");
+  await admin.getByRole("button", { name: "Retry" }).click();
+  await expect(admin.getByRole("button", { name: "Retry" })).toHaveCount(0);
+
+  await officer.goto("/officer");
+  await officer.route("**/api/officer/history?**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Bad gateway</h1>" }));
+  await officer.getByRole("combobox", { name: "Show" }).click();
+  await officer.getByRole("option", { name: "All officers" }).click();
+  await expect(officer.getByRole("region", { name: "Attendance history" }).getByRole("button", { name: "Retry" })).toBeVisible();
+  await officer.unroute("**/api/officer/history?**");
 });
 
 test("no screen threw an error during this whole run", () => {

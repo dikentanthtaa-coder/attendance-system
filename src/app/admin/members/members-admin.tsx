@@ -24,7 +24,6 @@ import {
   PersonRow,
   SearchInput,
   Select,
-  Skeleton,
   SourceBadge,
   StatList,
   TextInput,
@@ -60,17 +59,17 @@ type MemberPage = { members: Member[]; total: number; pageSize: number };
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 const COLUMNS = ["No", "MemberID", "Name", "Mo.no.", "Gender", "Center"];
 
-export function MembersAdmin() {
+export function MembersAdmin({ initial }: { initial: MemberPage }) {
   const [refreshKey, setRefreshKey] = useState(0);
-  // null until the list first loads. Uploading is a one-off job, so it only starts open with no members.
-  const [uploadOpen, setUploadOpen] = useState<boolean | null>(null);
+  // Uploading is a one-off job, so it only starts open with no members.
+  const [uploadOpen, setUploadOpen] = useState(initial.total === 0);
   return (
     <>
       <PageHeader
         title="Members"
         description="Upload the member list, then search, correct or remove anyone in it."
         actions={
-          <Button variant="secondary" icon={Upload} aria-expanded={Boolean(uploadOpen)} onClick={() => setUploadOpen((open) => !open)}>
+          <Button variant="secondary" icon={Upload} aria-expanded={uploadOpen} onClick={() => setUploadOpen((open) => !open)}>
             Upload Excel
           </Button>
         }
@@ -79,7 +78,7 @@ export function MembersAdmin() {
       <div className={uploadOpen ? "" : "hidden"}>
         <UploadCard onImported={() => setRefreshKey((k) => k + 1)} />
       </div>
-      <MemberList refreshKey={refreshKey} onFirstLoad={(total) => setUploadOpen((open) => open ?? total === 0)} />
+      <MemberList refreshKey={refreshKey} initial={initial} />
     </>
   );
 }
@@ -175,11 +174,11 @@ function UploadCard({ onImported }: { onImported: () => void }) {
   );
 }
 
-function MemberList({ refreshKey, onFirstLoad }: { refreshKey: number; onFirstLoad: (total: number) => void }) {
+function MemberList({ refreshKey, initial }: { refreshKey: number; initial: MemberPage }) {
   const toast = useToast();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [data, setData] = useState<MemberPage | null>(null);
+  const [data, setData] = useState(initial);
   const [loadError, setLoadError] = useState("");
   const [editing, setEditing] = useState<Member | null>(null);
   const [deleting, setDeleting] = useState<Member | null>(null);
@@ -195,7 +194,6 @@ function MemberList({ refreshKey, onFirstLoad }: { refreshKey: number; onFirstLo
         .then((result) => {
           setData(result);
           setLoadError("");
-          onFirstLoad(result.total);
         })
         .catch((err) => {
           if (err.name !== "AbortError") setLoadError(err.message);
@@ -205,7 +203,6 @@ function MemberList({ refreshKey, onFirstLoad }: { refreshKey: number; onFirstLo
       clearTimeout(timer);
       controller.abort();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- onFirstLoad is a new function each render and must not refetch
   }, [search, page, refreshKey, reloadKey]);
 
   async function confirmDelete() {
@@ -244,7 +241,7 @@ function MemberList({ refreshKey, onFirstLoad }: { refreshKey: number; onFirstLo
   return (
     <Card aria-label="Member list" className="overflow-hidden">
       <CardHeader
-        title={`All members${data ? ` (${data.total})` : ""}`}
+        title={`All members (${data.total})`}
         actions={
           <div className="w-full sm:w-80">
             <Field label="Search members" htmlFor="member-list-search">
@@ -272,13 +269,7 @@ function MemberList({ refreshKey, onFirstLoad }: { refreshKey: number; onFirstLo
         </div>
       )}
 
-      {!data && !loadError && (
-        <div aria-hidden className="flex flex-col gap-3 p-4">
-          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-11" />)}
-        </div>
-      )}
-
-      {data && data.members.length === 0 && (
+      {data.members.length === 0 && (
         search ? (
           <EmptyState icon={SearchX} titleAs="p" title={`No member matches “${search}”`} description="Check the spelling or try the mobile number." />
         ) : (
@@ -286,7 +277,7 @@ function MemberList({ refreshKey, onFirstLoad }: { refreshKey: number; onFirstLo
         )
       )}
 
-      {data && data.members.length > 0 && (
+      {data.members.length > 0 && (
         <DataTable
           rows={data.members}
           columns={columns}
@@ -317,7 +308,7 @@ function MemberList({ refreshKey, onFirstLoad }: { refreshKey: number; onFirstLo
         />
       )}
 
-      {data && <Pagination page={page} pageSize={data.pageSize} total={data.total} onPage={setPage} />}
+      <Pagination page={page} pageSize={data.pageSize} total={data.total} onPage={setPage} />
 
       <Modal open={editing !== null} onClose={() => setEditing(null)} title="Edit member">
         {editing && (

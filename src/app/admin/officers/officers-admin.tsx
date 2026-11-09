@@ -21,7 +21,6 @@ import {
   PersonRow,
   SearchInput,
   Select,
-  Skeleton,
   useToast,
   type Column,
   type SelectOption,
@@ -49,12 +48,12 @@ const STATUS_OPTIONS: SelectOption[] = [
   { value: "rejected", label: "No access" },
 ];
 
-export function OfficersAdmin() {
+export function OfficersAdmin({ initial }: { initial: OfficerPage }) {
   const toast = useToast();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [page, setPage] = useState(1);
-  const [data, setData] = useState<OfficerPage | null>(null);
+  const [data, setData] = useState(initial);
   const [loadError, setLoadError] = useState("");
   const [removing, setRemoving] = useState<Officer | null>(null);
   const [resetting, setResetting] = useState<Officer | null>(null);
@@ -142,7 +141,7 @@ export function OfficersAdmin() {
     <>
       <PageHeader title="Attendance Officers" description="Approve new officers, or remove access for anyone who no longer needs it." />
 
-      {data && data.pending > 0 && (
+      {data.pending > 0 && (
         <Alert
           tone="info"
           title={`${data.pending} ${data.pending === 1 ? "officer is" : "officers are"} waiting for your approval.`}
@@ -152,7 +151,7 @@ export function OfficersAdmin() {
 
       <Card aria-label="Officer list" className="overflow-hidden">
         <CardHeader
-          title={`Officers${data ? ` (${data.total})` : ""}`}
+          title={`Officers (${data.total})`}
           actions={
             <div className="grid w-full gap-3 sm:w-auto sm:grid-cols-[13rem_18rem]">
               <Field label="Status" htmlFor="officer-status">
@@ -177,13 +176,7 @@ export function OfficersAdmin() {
           </div>
         )}
 
-        {!data && !loadError && (
-          <div aria-hidden className="flex flex-col gap-3 p-4">
-            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-11" />)}
-          </div>
-        )}
-
-        {data && data.officers.length === 0 && (
+        {data.officers.length === 0 && (
           filtered ? (
             <EmptyState icon={SearchX} titleAs="p" title="No officers match" description="Try a different name, or change the status." />
           ) : (
@@ -191,7 +184,7 @@ export function OfficersAdmin() {
           )
         )}
 
-        {data && data.officers.length > 0 && (
+        {data.officers.length > 0 && (
           <DataTable
             rows={data.officers}
             columns={columns}
@@ -219,7 +212,7 @@ export function OfficersAdmin() {
           />
         )}
 
-        {data && <Pagination page={page} pageSize={data.pageSize} total={data.total} onPage={setPage} />}
+        <Pagination page={page} pageSize={data.pageSize} total={data.total} onPage={setPage} />
       </Card>
 
       <ConfirmDialog

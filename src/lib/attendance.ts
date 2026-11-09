@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { ApiError } from "./api";
-import type { Officer, SessionUser } from "./auth";
+import type { SessionUser } from "./auth";
 import { getSql, isUniqueViolation, withTransaction } from "./db";
 import { normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName, type AttendanceStatus } from "./shared";
 
@@ -82,7 +82,7 @@ export async function searchMembers(query: string, eventDay: number) {
  * get around it. Nothing yet, or removed by Admin: either status. Absent: can become Present, for
  * someone who arrives late. Present: stays as it is, because only Admin can undo attendance.
  */
-export async function markAttendance(officer: Officer, memberId: number, eventDay: number, status: AttendanceStatus) {
+export async function markAttendance(officer: SessionUser, memberId: number, eventDay: number, status: AttendanceStatus) {
   return withTransaction(async (tx) => {
     await requireActiveEvent(tx, eventDay);
 
@@ -155,7 +155,7 @@ export const quickEntrySchema = z.object({
   confirmDuplicateMobile: z.boolean().optional().default(false),
 });
 
-export async function quickEntry(officer: Officer, input: z.output<typeof quickEntrySchema>) {
+export async function quickEntry(officer: SessionUser, input: z.output<typeof quickEntrySchema>) {
   const globalId = normalizeMemberId(input.globalMemberId) || null;
 
   try {
@@ -207,6 +207,67 @@ export async function quickEntry(officer: Officer, input: z.output<typeof quickE
     }
     throw err;
   }
+}
+
+const HISTORY_PAGE_SIZE = 50;
+
+/** Who was marked on a day, newest first. Attendance Admin has removed doesn't appear. */
+export async function listHistory(officer: SessionUser, eventDay: number, scope: "mine" | "all", page: number) {
+  const sql = getSql();
+  const where = sql`a.event_day = ${eventDay} and a.status in ('present', 'absent') ${scope === "mine" ? sql`and a.marked_by = ${officer.id}` : sql``}`;
+  const [records, [{ total }]] = await Promise.all([
+    sql`
+      select a.id, a.status, a.marked_at, u.display_name as marked_by, a.marked_by = ${officer.id} as is_mine,
+             m.global_member_id, m.name, m.mobile, m.gender, m.center
+      from attendance a
+      join members m on m.id = a.member_id
+      join app_users u on u.id = a.marked_by
+      where ${where}
+      order by a.marked_at desc, a.id desc
+      limit ${HISTORY_PAGE_SIZE} offset ${(page - 1) * HISTORY_PAGE_SIZE}`,
+    sql`select count(*)::int as total from attendance a where ${where}`,
+  ]);
+  return { records, total, pageSize: HISTORY_PAGE_SIZE };
+}
+
+const UNMARKED_PAGE_SIZE = 10;
+
+/** Members with no Present or Absent yet on this day: the people still to be marked. */
+export async function listUnmarked(eventDay: number, page: number) {
+  const sql = getSql();
+  const where = sql`not exists (
+    select 1 from attendance a
+    where a.member_id = m.id and a.event_day = ${eventDay} and a.status in ('present', 'absent'))`;
+  const [members, [{ total }]] = await Promise.all([
+    sql`
+      select m.id, m.global_member_id, m.name, m.mobile, m.gender, m.center,
+             null::text as attendance_status, null::timestamptz as marked_at, null::text as marked_by
+      from members m where ${where}
+      order by m.name, m.id
+      limit ${UNMARKED_PAGE_SIZE} offset ${(page - 1) * UNMARKED_PAGE_SIZE}`,
+    sql`select count(*)::int as total from members m where ${where}`,
+  ]);
+  return { members, total, pageSize: UNMARKED_PAGE_SIZE };
+}
+
+/** Each day's totals, and this person's own part of them. */
+export async function listDayCounts(user: Pick<SessionUser, "id">) {
+  const rows = await getSql()`
+    select event_day,
+           count(*) filter (where status = 'present')::int as present,
+           count(*) filter (where status = 'absent')::int as absent,
+           count(*) filter (where status = 'present' and marked_by = ${user.id})::int as my_present,
+           count(*) filter (where status = 'absent' and marked_by = ${user.id})::int as my_absent
+    from attendance group by event_day`;
+  return Object.fromEntries(rows.map((c) => [c.event_day, { present: c.present, absent: c.absent, myPresent: c.my_present, myAbsent: c.my_absent }]));
+}
+
+/** Everything the marking screen shows first, so it arrives with the page, not after it. */
+export async function getDeskData(user: SessionUser) {
+  const events = await listEvents();
+  const day = events.find((e) => e.status === "active")?.event_day ?? 1;
+  const [counts, history, unmarked] = await Promise.all([listDayCounts(user), listHistory(user, day, "mine", 1), listUnmarked(day, 1)]);
+  return JSON.parse(JSON.stringify({ events, counts, day, history, unmarked }));
 }
 
 export async function listEvents(sql: Sql = getSql()) {

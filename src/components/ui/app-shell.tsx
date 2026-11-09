@@ -66,7 +66,7 @@ export function AppShell({
           </div>
           <div className="md:order-last"><LogoutButton /></div>
           {links && (
-            <nav aria-label="Admin" className="flex w-full gap-1 md:w-auto md:flex-1">
+            <nav aria-label="Admin" className="grid w-full grid-cols-2 gap-1 sm:flex md:w-auto md:flex-1">
               {links.map(({ href, label, icon: Icon }) => {
                 const current = pathname === href;
                 return (

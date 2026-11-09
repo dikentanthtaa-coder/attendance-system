@@ -23,7 +23,16 @@ export async function api<T>(url: string, options: { method?: string; json?: unk
     if ((err as Error).name === "AbortError") throw err;
     throw new ClientApiError(0, "network", "No connection. Check the internet and try again.", {});
   }
-  const data = await res.json().catch(() => ({}));
+  let data;
+  try {
+    data = await res.json();
+  } catch (err) {
+    // A request cancelled while its reply is arriving must stay cancelled. Treating it, or any
+    // unreadable reply, as an empty success makes screens read data that isn't there, and crash.
+    if ((err as Error).name === "AbortError") throw err;
+    if (res.ok) throw new ClientApiError(0, "bad_response", "Couldn't read the reply from the server. Please try again.", {});
+    data = {};
+  }
   if (!res.ok) {
     // A full page load on purpose: it discards all in-memory state from the expired session.
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination

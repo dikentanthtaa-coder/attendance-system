@@ -8,8 +8,8 @@ Built with Next.js, Postgres on Supabase, and Vercel hosting.
 
 | Role | How they get an account | Access |
 | --- | --- | --- |
-| Admin | `npm run seed` (username `admin`) | Excel upload, event start and end, approving officers, dashboard, reports, export, corrections |
-| Attendance Officer | Registers at `/register`, then Admin approves on the Officers page | Search all members, mark Present or Absent, Quick Entry |
+| Admin | `npm run seed` (username `admin`) | Excel upload, event start and end, approving officers, marking attendance, dashboard, reports, export, corrections |
+| Attendance Officer | Registers at `/register`, then Admin approves on the Officers page | See who isn't marked yet, search all members, mark Present or Absent, Quick Entry, their own totals and everyone's, and a history of each day's marks |
 
 Officers log in with their email or mobile number. Until Admin approves them they can't log in, and Admin can remove access at any time.
 

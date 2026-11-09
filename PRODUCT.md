@@ -10,6 +10,7 @@
 ## What each screen must answer first
 
 - **Officer:** "Is this person marked present?" The most frequent job is search, then one tap.
+- **Officer totals and history:** "How many have I marked, how many has everyone marked, and did that person go through?"
 - **Admin dashboard:** "Which day is running, and how many have attended, male and female?" The most frequent jobs are starting or ending a day and exporting.
 
 ## Rules the design has to respect

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CircleX, Clock, Download, FileUp, Hash, Inbox, MapPin, Mars, Pencil, Phone, Scale, SlidersHorizontal, UserPlus, UserRoundCheck, UsersRound, Venus, X } from "lucide-react";
+import { CircleX, Clock, Download, FileUp, Hash, History, Inbox, MapPin, Mars, Pencil, Phone, Scale, SlidersHorizontal, UserPlus, UserRoundCheck, UsersRound, Venus, X } from "lucide-react";
 import {
   Alert,
   AttendanceBadge,
@@ -20,7 +20,6 @@ import {
   PersonCell,
   PersonRow,
   Select,
-  Skeleton,
   SourceBadge,
   StatCard,
   TextInput,
@@ -31,11 +30,13 @@ import {
 import { api } from "@/lib/client-api";
 import { formatDate, formatDateTime, formatTime, type AttendanceStatus, type Gender, type MemberSource } from "@/lib/shared";
 
-type Filters = { event: string; date: string; gender: string; center: string; source: string; status: string };
+type Filters = { event: string; date: string; gender: string; center: string; source: string; status: string; officer: string };
 
-const NO_FILTERS: Filters = { event: "all", date: "all", gender: "all", center: "all", source: "all", status: "all" };
+const NO_FILTERS: Filters = { event: "all", date: "all", gender: "all", center: "all", source: "all", status: "all", officer: "all" };
 
 type DayRow = { eventDay: number; eventName: string; date: string; male: number; female: number; total: number; absent: number };
+
+type OfficerRow = { id: string; name: string; present: number; absent: number };
 
 type Summary = {
   male: number;
@@ -49,6 +50,7 @@ type Summary = {
   quickEntryToday: number;
   quickEntryInSelection: number;
   byDay: DayRow[];
+  byOfficer: OfficerRow[];
 };
 
 type AttendanceRecord = {
@@ -68,7 +70,7 @@ type AttendanceRecord = {
 type Report = {
   summary: Summary;
   records: AttendanceRecord[];
-  options: { centers: string[]; dates: string[] };
+  options: { centers: string[]; dates: string[]; officers: { id: string; name: string }[] };
   page: number;
   pageSize: number;
 };
@@ -102,13 +104,13 @@ const SOURCE_OPTIONS: SelectOption[] = [
 
 const shortEvent = (r: AttendanceRecord) => r.event_name.replace("Gyansatr ", "");
 
-export function Dashboard() {
+export function Dashboard({ initial, generatedAt }: { initial: Report; generatedAt: string }) {
   const toast = useToast();
   const [filters, setFilters] = useState(NO_FILTERS);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [page, setPage] = useState(1);
-  const [report, setReport] = useState<Report | null>(null);
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [report, setReport] = useState<Report>(initial);
+  const [updatedAt, setUpdatedAt] = useState<Date>(() => new Date(generatedAt));
   const [error, setError] = useState("");
   const [correcting, setCorrecting] = useState<AttendanceRecord | null>(null);
 
@@ -145,8 +147,8 @@ export function Dashboard() {
   };
 
   const activeFilters = Object.values(filters).filter((v) => v !== "all").length;
-  const s = report?.summary;
-  const noMembers = report?.options.centers.length === 0;
+  const s = report.summary;
+  const noMembers = report.options.centers.length === 0;
 
   return (
     <>
@@ -158,14 +160,14 @@ export function Dashboard() {
       </div>
 
       <Card aria-label="Filters" className={`${filtersOpen ? "block" : "hidden"} p-4 md:block`}>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
           <FilterSelect id="f-event" label="Event" value={filters.event} onChange={(v) => setFilter("event", v)} options={EVENT_OPTIONS} />
           <FilterSelect
             id="f-date"
             label="Date"
             value={filters.date}
             onChange={(v) => setFilter("date", v)}
-            options={[{ value: "all", label: "All Dates" }, ...(report?.options.dates ?? []).map((d) => ({ value: d, label: formatDate(d) }))]}
+            options={[{ value: "all", label: "All Dates" }, ...report.options.dates.map((d) => ({ value: d, label: formatDate(d) }))]}
           />
           <FilterSelect id="f-gender" label="Gender" value={filters.gender} onChange={(v) => setFilter("gender", v)} options={GENDER_OPTIONS} />
           <FilterSelect
@@ -173,10 +175,17 @@ export function Dashboard() {
             label="Center"
             value={filters.center}
             onChange={(v) => setFilter("center", v)}
-            options={[{ value: "all", label: "All Centers" }, ...(report?.options.centers ?? []).map((c) => ({ value: c, label: c }))]}
+            options={[{ value: "all", label: "All Centers" }, ...report.options.centers.map((c) => ({ value: c, label: c }))]}
           />
           <FilterSelect id="f-source" label="Member source" value={filters.source} onChange={(v) => setFilter("source", v)} options={SOURCE_OPTIONS} />
           <FilterSelect id="f-status" label="Status" value={filters.status} onChange={(v) => setFilter("status", v)} options={STATUS_OPTIONS} />
+          <FilterSelect
+            id="f-officer"
+            label="Marked by"
+            value={filters.officer}
+            onChange={(v) => setFilter("officer", v)}
+            options={[{ value: "all", label: "All Officers" }, ...report.options.officers.map((o) => ({ value: o.id, label: o.name }))]}
+          />
         </div>
         {activeFilters > 0 && (
           <div className="mt-3 flex justify-end">
@@ -188,7 +197,7 @@ export function Dashboard() {
       {error && (
         <Alert
           tone="danger"
-          title={`${error}${updatedAt ? ` These numbers are from ${formatTime(updatedAt)}.` : ""}`}
+          title={`${error} These numbers are from ${formatTime(updatedAt)}.`}
           action={<Button variant="secondary" size="sm" onClick={() => load()}>Retry</Button>}
         />
       )}
@@ -203,29 +212,29 @@ export function Dashboard() {
         </Alert>
       )}
 
-      {!s && !error && <SummarySkeleton />}
+      <SummaryCards s={s} />
+      <ByOfficer
+        s={s}
+        onView={(id) => {
+          setFilter("officer", id);
+          document.getElementById("attendance-records")?.scrollIntoView({ behavior: "smooth" });
+        }}
+      />
+      <DayWise s={s} gender={filters.gender} />
 
-      {s && (
-        <>
-          <SummaryCards s={s} />
-          <DayWise s={s} gender={filters.gender} />
-
-          <Card aria-label="Attendance records" className="overflow-hidden">
-            <CardHeader
-              title="Attendance report"
-              description={
-                <>
-                  {s.records} records: {s.total} present, {s.absent} absent
-                  {updatedAt ? `. Updated ${formatTime(updatedAt)}` : ""}
-                </>
-              }
-              actions={<div className="hidden md:block"><ExportLink query={query} /></div>}
-            />
-            <RecordsTable records={report.records} onCorrect={setCorrecting} />
-            <Pagination page={page} pageSize={report.pageSize} total={s.records} onPage={setPage} />
-          </Card>
-        </>
-      )}
+      <Card id="attendance-records" aria-label="Attendance records" className="scroll-mt-20 overflow-hidden">
+        <CardHeader
+          title="Attendance report"
+          description={
+            <>
+              {s.records} records: {s.total} present, {s.absent} absent. Updated {formatTime(updatedAt)}
+            </>
+          }
+          actions={<div className="hidden md:block"><ExportLink query={query} /></div>}
+        />
+        <RecordsTable records={report.records} onCorrect={setCorrecting} />
+        <Pagination page={page} pageSize={report.pageSize} total={s.records} onPage={setPage} />
+      </Card>
 
       <Modal open={correcting !== null} onClose={() => setCorrecting(null)} title="Correct attendance">
         {correcting && (
@@ -259,16 +268,6 @@ function ExportLink({ query }: { query: string }) {
   return <LinkButton native href={`/api/admin/report/export?${query}`} icon={Download}>Export to Excel</LinkButton>;
 }
 
-function SummarySkeleton() {
-  return (
-    <div aria-hidden className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
-      {[0, 1, 2, 3, 4, 5].map((i) => (
-        <Skeleton key={i} className={`h-28 rounded-card ${i < 2 ? "col-span-2 lg:col-span-1" : ""}`} />
-      ))}
-    </div>
-  );
-}
-
 function SummaryCards({ s }: { s: Summary }) {
   const difference = s.male - s.female;
   return (
@@ -286,6 +285,51 @@ function SummaryCards({ s }: { s: Summary }) {
       />
       <StatCard tone="warn" icon={UserPlus} label="Quick Entry today" value={s.quickEntryToday} note={`${s.quickEntryInSelection} in these filters`} testId="stat-quick" />
     </section>
+  );
+}
+
+/** Each officer's own total, with the entire total underneath. It follows the filters above. */
+function ByOfficer({ s, onView }: { s: Summary; onView: (id: string) => void }) {
+  if (s.byOfficer.length === 0) return null;
+  return (
+    <Card aria-label="Attendance by officer" className="overflow-hidden">
+      <CardHeader title="By officer" description="How many people each officer has marked." />
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="bg-canvas text-left text-xs text-muted">
+            <th scope="col" className="py-2.5 pr-3 pl-4 font-semibold md:pl-5">Officer</th>
+            <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Present</th>
+            <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Absent</th>
+            <th scope="col" className="py-2.5 pr-3 text-right font-semibold">Total</th>
+            <th scope="col" aria-label="Actions" className="pr-2 md:pr-3" />
+          </tr>
+        </thead>
+        <tbody>
+          {s.byOfficer.map((o) => (
+            <tr key={o.id} className="border-t border-rule">
+              <td className="py-1.5 pr-3 pl-4 font-semibold md:pl-5">{o.name}</td>
+              <td className="py-1.5 pr-3 text-right">{o.present}</td>
+              <td className="py-1.5 pr-3 text-right">{o.absent}</td>
+              <td className="py-1.5 pr-3 text-right font-bold">{o.present + o.absent}</td>
+              <td className="py-1 pr-2 text-right md:pr-3">
+                <Button variant="ghost" size="sm" icon={History} aria-label={`View history for ${o.name}`} onClick={() => onView(o.id)}>
+                  <span className="hidden sm:inline">History</span>
+                </Button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr className="border-t-2 border-line bg-canvas font-bold" data-testid="officer-totals">
+            <th scope="row" className="py-2.5 pr-3 pl-4 text-left md:pl-5">All officers</th>
+            <td className="py-2.5 pr-3 text-right">{s.total}</td>
+            <td className="py-2.5 pr-3 text-right">{s.absent}</td>
+            <td className="py-2.5 pr-3 text-right">{s.records}</td>
+            <td />
+          </tr>
+        </tfoot>
+      </table>
+    </Card>
   );
 }
 

@@ -53,6 +53,7 @@ Mukta Vaani throughout: it covers Latin and Gujarati, and has true tabular figur
 
 - Touch targets are at least 44px on phones. Below `lg`, `DataTable` shows a list instead of a table, and every field is kept.
 - One main action per view: Mark Present is green, and everything else is quieter.
+- Totals show the person's own figure next to the whole: "My present" beside "Total present" for an officer, each officer beside "All officers" for Admin.
 - Confirmation appears beside the search box and toasts at the top of the screen, because a phone keyboard can hide the bottom.
 - Dropdowns are always `Select` or `CenterSelect`, never the browser's own `<select>` or `<datalist>`, which can't be styled and differ on every device. A filter in use is tinted, so it's clear why the numbers are narrowed.
 - Quick Entry lives on the page. Dialogs are only for confirming something hard to undo, or for short edits.

@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Play, RotateCcw, Square, type LucideIcon } from "lucide-react";
+import { Play, RotateCcw, Square, UserCheck, type LucideIcon } from "lucide-react";
 import { EventDayCard } from "@/components/event-days";
-import { Alert, Button, ConfirmDialog, PageHeader, useToast, type ButtonVariant } from "@/components/ui";
+import { Alert, Button, ConfirmDialog, LinkButton, PageHeader, useToast, type ButtonVariant } from "@/components/ui";
 import { api } from "@/lib/client-api";
 import { formatDateTime, type EventSession } from "@/lib/shared";
 
@@ -64,7 +64,11 @@ export function EventControls({ initialEvents }: { initialEvents: EventSession[]
     <section aria-label="Event control" className="flex flex-col gap-4">
       <PageHeader title="Dashboard" description="Run each day of the event and watch attendance as it comes in." />
 
-      <Alert tone={active ? "ok" : "info"} title={active ? `${active.name} is running. Officers can mark attendance.` : "No event is running, so officers can't mark attendance."} />
+      <Alert
+        tone={active ? "ok" : "info"}
+        title={active ? `${active.name} is running. Attendance can be marked.` : "No event is running, so attendance can't be marked."}
+        action={active && <LinkButton href="/admin/mark" variant="primary" size="sm" icon={UserCheck}>Mark Attendance</LinkButton>}
+      />
 
       <div className="grid gap-3 md:grid-cols-3">
         {events.map((event) => {

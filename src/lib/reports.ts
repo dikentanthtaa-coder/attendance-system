@@ -14,6 +14,7 @@ const filterSchema = z.object({
   center: z.string().max(80).catch("all"),
   source: z.enum(["all", "excel_import", "quick_entry"]).catch("all"),
   status: z.enum(["all", "present", "absent"]).catch("all"),
+  officer: z.uuid().or(z.literal("all")).catch("all"),
 });
 
 export type ReportFilters = z.output<typeof filterSchema>;
@@ -28,6 +29,7 @@ export function parseFilters(params: URLSearchParams): ReportFilters {
     center: get("center"),
     source: get("source"),
     status: get("status"),
+    officer: get("officer"),
   });
 }
 
@@ -42,6 +44,7 @@ function attendanceWhere(sql: Sql, f: ReportFilters) {
   if (f.gender !== "all") where = sql`${where} and m.gender = ${f.gender}`;
   if (f.center !== "all") where = sql`${where} and m.center = ${f.center}`;
   if (f.source !== "all") where = sql`${where} and m.created_source = ${f.source}`;
+  if (f.officer !== "all") where = sql`${where} and a.marked_by = ${f.officer}`;
   return where;
 }
 
@@ -53,13 +56,14 @@ export async function getSummary(f: ReportFilters) {
     let w = sql`m.created_source = 'quick_entry'`;
     if (f.gender !== "all") w = sql`${w} and m.gender = ${f.gender}`;
     if (f.center !== "all") w = sql`${w} and m.center = ${f.center}`;
+    if (f.officer !== "all") w = sql`${w} and m.created_by = ${f.officer}`;
     return w;
   };
   let quickSelection = memberFilter();
   if (f.event !== "all") quickSelection = sql`${quickSelection} and m.created_event_day = ${Number(f.event)}`;
   if (f.date !== "all") quickSelection = sql`${quickSelection} and (m.created_at at time zone ${IST})::date = ${f.date}::date`;
 
-  const [[totals], byDay, [quick]] = await Promise.all([
+  const [[totals], byDay, [quick], byOfficer] = await Promise.all([
     sql`
       select
         count(*) filter (where a.status = 'present' and m.gender = 'Male')::int as male,
@@ -93,6 +97,23 @@ export async function getSummary(f: ReportFilters) {
         count(*) filter (where ${quickSelection})::int as in_selection
       from members m
       where ${memberFilter()}`,
+    // Every approved officer is listed even with nothing marked yet, along with anyone whose
+    // marks are in the report, such as an officer whose access was later removed.
+    sql`
+      select u.id, u.display_name as name,
+             coalesce(t.present, 0)::int as present, coalesce(t.absent, 0)::int as absent
+      from app_users u
+      left join (
+        select a.marked_by,
+               count(*) filter (where a.status = 'present') as present,
+               count(*) filter (where a.status = 'absent') as absent
+        from attendance a join members m on m.id = a.member_id
+        where ${where}
+        group by a.marked_by
+      ) t on t.marked_by = u.id
+      where (t.marked_by is not null or (u.role = 'officer' and u.is_active and u.approval_status = 'approved'))
+        ${f.officer !== "all" ? sql`and u.id = ${f.officer}` : sql``}
+      order by coalesce(t.present, 0) + coalesce(t.absent, 0) desc, u.display_name`,
   ]);
 
   return {
@@ -106,6 +127,12 @@ export async function getSummary(f: ReportFilters) {
     fromQuickEntry: totals.from_quick_entry as number,
     quickEntryToday: quick.today as number,
     quickEntryInSelection: quick.in_selection as number,
+    byOfficer: byOfficer.map((r) => ({
+      id: r.id as string,
+      name: r.name as string,
+      present: r.present as number,
+      absent: r.absent as number,
+    })),
     byDay: byDay.map((r) => ({
       eventDay: r.event_day as number,
       eventName: r.event_name as string,
@@ -135,19 +162,30 @@ export async function getRecords(f: ReportFilters, page: number) {
 
 export async function getFilterOptions() {
   const sql = getSql();
-  const [centers, dates] = await Promise.all([
+  const [centers, dates, officers] = await Promise.all([
     sql`select distinct center from members order by center`,
     sql`
       select distinct ((marked_at at time zone ${IST})::date)::text as date
       from attendance where status in ('present', 'absent') order by 1 desc`,
+    sql`
+      select u.id, u.display_name as name from app_users u
+      where (u.role = 'officer' and u.is_active and u.approval_status = 'approved')
+        or exists (select 1 from attendance a where a.marked_by = u.id and a.status in ('present', 'absent'))
+      order by u.display_name`,
   ]);
   return {
     centers: centers.map((r) => r.center as string),
     dates: dates.map((r) => r.date as string),
+    officers: officers.map((r) => ({ id: r.id as string, name: r.name as string })),
   };
 }
 
-function describeFilters(f: ReportFilters) {
+export async function getReport(filters: ReportFilters, page: number) {
+  const [summary, records, options] = await Promise.all([getSummary(filters), getRecords(filters, page), getFilterOptions()]);
+  return { summary, records, options, page, pageSize: PAGE_SIZE };
+}
+
+function describeFilters(f: ReportFilters, officerName: string) {
   return [
     ["Event", f.event === "all" ? "All Days" : `Gyansatr Day ${f.event}`],
     ["Date", f.date === "all" ? "All Dates" : formatDate(f.date)],
@@ -155,6 +193,7 @@ function describeFilters(f: ReportFilters) {
     ["Center", f.center === "all" ? "All Centers" : f.center],
     ["Member source", f.source === "all" ? "All" : SOURCE_LABEL[f.source]],
     ["Status", f.status === "all" ? "All" : ATTENDANCE_LABEL[f.status]],
+    ["Marked by", f.officer === "all" ? "All Officers" : officerName],
   ];
 }
 
@@ -189,7 +228,8 @@ export async function buildExport(f: ReportFilters) {
   sheet.addRow(["Generated", formatDateTime(new Date())]);
   sheet.addRow([]);
   sheet.addRow(["Filters applied"]).font = { bold: true };
-  describeFilters(f).forEach((row) => sheet.addRow(row));
+  const officerName = summary.byOfficer[0]?.name ?? "";
+  describeFilters(f, officerName).forEach((row) => sheet.addRow(row));
   sheet.addRow([]);
   sheet.addRow(["Totals"]).font = { bold: true };
   sheet.addRow(["Male attendees", summary.male]);
@@ -204,6 +244,12 @@ export async function buildExport(f: ReportFilters) {
   sheet.addRow(["Date-wise / Event Day-wise"]).font = { bold: true };
   styleHeader(sheet.addRow(["Event", "Date", "Male", "Female", "Total present", "Absent"]));
   summary.byDay.forEach((d) => sheet.addRow([d.eventName, formatDate(d.date), d.male, d.female, d.total, d.absent]));
+
+  sheet.addRow([]);
+  sheet.addRow(["Officer-wise"]).font = { bold: true };
+  styleHeader(sheet.addRow(["Officer", "Present", "Absent", "Total"]));
+  summary.byOfficer.forEach((o) => sheet.addRow([o.name, o.present, o.absent, o.present + o.absent]));
+  sheet.addRow(["All officers", summary.total, summary.absent, summary.records]).font = { bold: true };
 
   const data = workbook.addWorksheet("Attendance", { views: [{ state: "frozen", ySplit: 1 }] });
   data.columns = [
@@ -245,6 +291,7 @@ export async function buildExport(f: ReportFilters) {
     f.center !== "all" && f.center.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
     f.source !== "all" && f.source.replace("_", "-"),
     f.status !== "all" && f.status,
+    f.officer !== "all" && officerName.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
   ].filter(Boolean);
 
   return {

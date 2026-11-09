@@ -17,8 +17,6 @@ export type SessionUser = {
   sessionVersion: number;
 };
 
-export type Officer = SessionUser & { role: "officer" };
-
 const COOKIE = "att_session";
 const SESSION_DAYS = 7; // long enough that nobody is logged out mid-event
 const MAX_FAILED_ATTEMPTS = 5;
@@ -150,5 +148,5 @@ export async function requirePageRole<R extends SessionUser["role"]>(role: R) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   if (user.mustChangePassword || user.role !== role) redirect(homeFor(user));
-  return user as R extends "officer" ? Officer : SessionUser;
+  return user;
 }

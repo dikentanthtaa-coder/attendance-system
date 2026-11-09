@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { officerRoute, readJson } from "@/lib/api";
+import { anyUserRoute, readJson } from "@/lib/api";
 import { eventDaySchema, markAttendance } from "@/lib/attendance";
 
 const schema = z.object({
@@ -8,7 +8,7 @@ const schema = z.object({
   status: z.enum(["present", "absent"]).default("present"),
 });
 
-export const POST = officerRoute(async (officer, req) => {
+export const POST = anyUserRoute(async (user, req) => {
   const { memberId, eventDay, status } = schema.parse(await readJson(req));
-  return markAttendance(officer, memberId, eventDay, status);
+  return markAttendance(user, memberId, eventDay, status);
 });
