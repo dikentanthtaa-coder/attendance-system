@@ -231,14 +231,19 @@ function MarkingPanel({
   }, [trimmed, searchKey, area, event.event_day]);
 
   const version = String(count.present);
+  // Officers find people by search only, so the list stays off their screen. Admin keeps it.
+  const showList = officerGender === null;
+  // Officers still need the area names, which come with the first page, so theirs is fetched once.
+  const listQuery = showList ? `page=${unmarkedPage}&center=${encodeURIComponent(area)}` : "page=1&center=all";
+  const listVersion = showList ? version : "";
 
   useEffect(() => {
     const controller = new AbortController();
-    api<UnmarkedPage>(`/api/officer/unmarked?day=${event.event_day}&page=${unmarkedPage}&center=${encodeURIComponent(area)}`, { signal: controller.signal })
+    api<UnmarkedPage>(`/api/officer/unmarked?day=${event.event_day}&${listQuery}`, { signal: controller.signal })
       .then(setUnmarked)
       .catch(() => {}); // the list on screen stays, and the next change tries again
     return () => controller.abort();
-  }, [event.event_day, unmarkedPage, area, version]);
+  }, [event.event_day, listQuery, listVersion]);
 
   const clearSearch = () => {
     setQuery("");
@@ -364,7 +369,7 @@ function MarkingPanel({
       )}
 
       {/* Below the confirmation, so a phone's keyboard can't push that out of view. */}
-      <section aria-label="Area and Quick Entry" className="grid grid-cols-2 items-end gap-2 sm:gap-3">
+      <section aria-label="Area and Quick Entry" className="flex flex-col gap-3">
         <Field label="Area" htmlFor="area-filter" labelOnlyForReaders>
           <Select
             id="area-filter"
@@ -377,8 +382,9 @@ function MarkingPanel({
             }}
           />
         </Field>
-        <Button variant={noMatches ? "primary" : "secondary"} icon={UserPlus} className="max-sm:px-2" onClick={openQuickEntry}>
-          Quick Entry<span className="max-sm:hidden">: add new member</span>
+        {/* Full width and filled, so it's easy to find for someone who isn't on the list. */}
+        <Button size="lg" icon={UserPlus} className="w-full" onClick={openQuickEntry}>
+          Quick Entry: add new member
         </Button>
       </section>
 
@@ -410,7 +416,7 @@ function MarkingPanel({
         </Card>
       )}
 
-      {!trimmed && (
+      {showList && !trimmed && (
         <Card aria-label="Not marked yet" className="overflow-hidden">
           <CardHeader
             title={<span className="inline-flex items-center gap-2"><ListChecks aria-hidden size={16} className="text-muted" />Not marked yet{unmarked ? ` (${unmarked.total})` : ""}</span>}

@@ -510,7 +510,7 @@ test("Present only: no Absent option anywhere, and an officer can never undo Pre
   expect((await officerApi.delete(`/api/admin/members/${late}`)).status()).toBe(403);
 });
 
-test("the Area dropdown narrows the list and the search, and keeps within the officer's gender", async () => {
+test("the Area dropdown narrows the search, and keeps within the officer's gender", async () => {
   const add = async (id: string, name: string, mobile: string, center: string, gender = "Male") => {
     await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values (${id}, ${name}, ${mobile}, ${gender}, ${center}, 'excel_import')`;
   };
@@ -528,18 +528,12 @@ test("the Area dropdown narrows the list and the search, and keeps within the of
   expect(options).toEqual(expect.arrayContaining(["Pune", "Vapi", "Surat"]));
   expect(options).not.toContain("Nashik"); // only the other gender is there
   await officer.getByRole("option", { name: "Pune", exact: true }).click();
-
-  const list = officer.getByRole("region", { name: "Not marked yet" });
-  await expect(list).toContainText("Area Puneman");
-  await expect(list).not.toContainText("Area Vapiman");
-  const inPune = (await db`
-    select count(*)::int as n from members m where m.gender = 'Male' and m.center = 'Pune' and not exists (
-      select 1 from attendance a where a.member_id = m.id and a.event_day = 1 and a.status = 'present')`)[0].n;
-  await expect(list.getByRole("heading")).toContainText(`(${inPune})`);
   await officer.screenshot({ path: "test-results/screens/officer-area.png" });
 
   // Search stays inside the chosen area, and changing the area updates results already showing.
   const box = officer.getByLabel(/Search by Member ID/);
+  await box.fill("Area P");
+  await expect(officer.getByRole("region", { name: "Search results" })).toContainText("Area Puneman");
   await box.fill("Area V");
   await expect(officer.getByText("No member matches “Area V” in Pune")).toBeVisible();
   await area.click();
@@ -936,7 +930,7 @@ test("totals and history: each officer sees their own and the whole, and a new m
   }
 });
 
-test("Mark Present is offered without searching, with page numbers, for officers and for Admin", async () => {
+test("Mark Present is offered without searching, with page numbers, for Admin only", async () => {
   const add = async (id: string, name: string, mobile: string, gender = "Male") => {
     await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values (${id}, ${name}, ${mobile}, ${gender}, 'Vapi', 'excel_import')`;
     return memberId(id);
@@ -946,62 +940,60 @@ test("Mark Present is offered without searching, with page numbers, for officers
   await add("5003", "Aarohi Third", "9876550003", "Female");
   const statusOf = async (id: number) => (await db`select status from attendance where member_id = ${id} and event_day = 1`)[0]?.status;
 
-  // Officer: the list is there on arrival, with nothing typed, showing only their gender and only who's left.
+  // Officers find people by search only: no list, and Quick Entry is full width and filled.
   await officer.goto("/officer");
-  const list = officer.getByRole("region", { name: "Not marked yet" });
-  const row = list.getByRole("listitem").filter({ hasText: "Aaru First" });
-  await expect(row.getByRole("button", { name: "Mark Present" })).toBeVisible();
-  await expect(list).not.toContainText("Aaditi Second");
-  await expect(list).not.toContainText("Suresh Shah");
-  await officer.screenshot({ path: "test-results/screens/officer-not-marked-phone.png", fullPage: true });
-
-  const expected = async () => (await db`
-    select count(*)::int as n from members m where m.gender = 'Male' and not exists (
-      select 1 from attendance a where a.member_id = m.id and a.event_day = 1 and a.status = 'present')`)[0].n as number;
-  await expect(list.getByRole("heading")).toContainText(`(${await expected()})`);
-
-  await row.getByRole("button", { name: "Mark Present" }).click();
-  await expect(officer.getByRole("status")).toContainText("Present: Aaru First");
-  await expect(row).toHaveCount(0);
-  await expect(list.getByRole("heading")).toContainText(`(${await expected()})`);
-  await showView(officer, "History");
-  await expect(officer.getByRole("region", { name: "Attendance history" })).toContainText("Aaru First");
-  await showView(officer, "Mark");
-
-  // Page numbers, once there's more than one page.
-  await Promise.all(Array.from({ length: 25 }, (_, i) => add(`90${10 + i}`, `Zzz Page${10 + i}`, `98765900${10 + i}`)));
-  await officer.reload();
-  const pages = list.getByRole("navigation", { name: "Pages" });
-  await expect(pages.getByRole("button", { name: "Page 1", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(pages.getByRole("button", { name: "Previous" })).toBeDisabled();
-  await pages.getByRole("button", { name: "Page 3", exact: true }).click();
-  await expect(pages.getByRole("button", { name: "Page 3", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(list).toContainText("Showing 21–30");
-  await pages.getByRole("button", { name: "Next" }).click();
-  await expect(pages.getByRole("button", { name: "Page 4", exact: true })).toHaveAttribute("aria-current", "page");
-  await pages.getByRole("button", { name: "Page 1", exact: true }).click();
-  await expect(pages.getByRole("button", { name: "Page 1", exact: true })).toHaveAttribute("aria-current", "page");
-
-  // Typing swaps the list for the search results.
+  await expect(officer.getByLabel(/Search by Member ID/)).toBeVisible();
+  await expect(officer.getByRole("region", { name: "Not marked yet" })).toHaveCount(0);
+  const quick = officer.getByRole("button", { name: /Quick Entry/ });
+  await expect(quick).toHaveText("Quick Entry: add new member");
+  await expect(quick).toHaveCSS("background-color", "rgb(28, 90, 150)");
+  const searchCard = (await officer.getByRole("region", { name: /^Mark attendance for/ }).boundingBox())!;
+  expect(Math.abs((await quick.boundingBox())!.width - searchCard.width)).toBeLessThan(2);
   await officer.getByLabel(/Search by Member ID/).fill("5001");
   await expect(officer.getByRole("region", { name: "Search results" })).toContainText("Aaru First");
-  await expect(list).toHaveCount(0);
-  await officer.getByLabel(/Search by Member ID/).fill("");
-  await expect(list).toBeVisible();
+  await officer.screenshot({ path: "test-results/screens/officer-no-list.png", fullPage: true });
 
-  // Admin: a tab and a shortcut to the same screen, covering everyone.
+  // Admin: a tab and a shortcut to the same screen, with the list of who's left, covering everyone.
   await admin.goto("/admin");
   await admin.getByRole("main").getByRole("link", { name: "Mark Attendance" }).click();
   await admin.waitForURL("**/admin/mark");
   await expect(admin.getByRole("heading", { name: /^Marking Gyansatr Day/ })).toHaveCount(1);
   await expect(admin.getByRole("button", { name: /Absent/ })).toHaveCount(0);
-  const adminList = admin.getByRole("region", { name: "Not marked yet" });
-  await adminList.getByRole("listitem").filter({ hasText: "Aaditi Second" }).getByRole("button", { name: "Mark Present" }).click();
+  const list = admin.getByRole("region", { name: "Not marked yet" });
+  const expected = async () => (await db`
+    select count(*)::int as n from members m where not exists (
+      select 1 from attendance a where a.member_id = m.id and a.event_day = 1 and a.status = 'present')`)[0].n as number;
+  await expect(list.getByRole("heading")).toContainText(`(${await expected()})`);
+  const row = list.getByRole("listitem").filter({ hasText: "Aaditi Second" });
+  await row.getByRole("button", { name: "Mark Present" }).click();
   await expect(admin.getByRole("status")).toContainText("Present: Aaditi Second");
+  await expect(row).toHaveCount(0);
+  await expect(list.getByRole("heading")).toContainText(`(${await expected()})`);
   await admin.screenshot({ path: "test-results/screens/admin-mark.png", fullPage: true });
   expect(await statusOf(second)).toBe("present");
   const adminHistory = admin.getByRole("region", { name: "Attendance history" });
   await expect(adminHistory.getByRole("listitem").filter({ hasText: "Aaditi Second" })).toContainText("You");
+
+  // Page numbers, once there's more than one page.
+  await Promise.all(Array.from({ length: 25 }, (_, i) => add(`90${10 + i}`, `Zzz Page${10 + i}`, `98765900${10 + i}`)));
+  await admin.reload();
+  const pages = list.getByRole("navigation", { name: "Pages" });
+  await expect(pages.getByRole("button", { name: "Page 1", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(pages.getByRole("button", { name: "Previous" })).toBeDisabled();
+  await pages.getByRole("button", { name: "Page 2", exact: true }).click();
+  await expect(pages.getByRole("button", { name: "Page 2", exact: true })).toHaveAttribute("aria-current", "page");
+  await pages.getByRole("button", { name: "Next" }).click();
+  await expect(pages.getByRole("button", { name: "Page 3", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(list).toContainText("Showing 21–30");
+  await pages.getByRole("button", { name: "Page 1", exact: true }).click();
+  await expect(pages.getByRole("button", { name: "Page 1", exact: true })).toHaveAttribute("aria-current", "page");
+
+  // Typing swaps the list for the search results.
+  await admin.getByLabel(/Search by Member ID/).fill("5001");
+  await expect(admin.getByRole("region", { name: "Search results" })).toContainText("Aaru First");
+  await expect(list).toHaveCount(0);
+  await admin.getByLabel(/Search by Member ID/).fill("");
+  await expect(list).toBeVisible();
 
   // It counts for Admin in the reports, so the officers' totals still add up to the whole.
   await admin.goto("/admin");
@@ -1038,7 +1030,8 @@ test("pages arrive with their numbers already in them, not placeholders to fill 
   for (const [api, path] of [[officerApi, "/officer"], [adminApi, "/admin/mark"]] as const) {
     const desk = await html(api, path);
     expect(desk).not.toContain("animate-pulse");
-    expect(desk).toContain("Not marked yet");
+    if (api === adminApi) expect(desk).toContain("Not marked yet");
+    else expect(desk).not.toContain("Not marked yet");
     expect(desk).toContain('data-testid="stat-my-present"');
   }
 });
@@ -1778,16 +1771,23 @@ test("the marking screen: side by side on large screens, one at a time with a bo
   await expect(large.getByRole("navigation", { name: "Marking view" })).toBeHidden();
   await large.screenshot({ path: "test-results/screens/officer-desktop.png" });
 
-  // History stays in view while the long list on the left scrolls away.
-  const before = (await right.boundingBox())!;
-  await large.mouse.move(l.x + 10, l.y + 300);
-  await large.mouse.wheel(0, 600);
-  await expect.poll(() => large.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-  const after = (await right.boundingBox())!;
+  await large.context().close();
+
+  // History stays in view while the long list on the left scrolls away. Only Admin has that list.
+  const wide = await loginPage(browser, "admin", { width: 1440, height: 900 });
+  await wide.goto("/admin/mark");
+  const adminLeft = (await wide.getByLabel(/Search by Member ID/).boundingBox())!;
+  const adminRight = wide.getByRole("region", { name: "Attendance history" });
+  await expect(wide.getByRole("region", { name: "Not marked yet" }).getByRole("listitem").first()).toBeVisible();
+  const before = (await adminRight.boundingBox())!;
+  await wide.mouse.move(adminLeft.x + 10, adminLeft.y + 300);
+  await wide.mouse.wheel(0, 600);
+  await expect.poll(() => wide.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  const after = (await adminRight.boundingBox())!;
   expect(after.y).toBeGreaterThan(0);
   expect(after.y).toBeLessThanOrEqual(before.y);
-  await expect(right).toBeInViewport();
-  await large.context().close();
+  await expect(adminRight).toBeInViewport();
+  await wide.context().close();
 
   // The header keeps Log out level with the title at every width, however many links there are.
   for (const width of [390, 640, 820, 1024, 1280, 1920]) {
@@ -1807,16 +1807,15 @@ test("the marking screen: side by side on large screens, one at a time with a bo
     const box = getComputedStyle(input);
     const context = document.createElement("canvas").getContext("2d")!;
     context.font = `${style.fontWeight} ${style.fontSize} ${box.fontFamily}`;
-    const room = input.clientWidth - parseFloat(box.paddingLeft) - parseFloat(box.paddingRight);
+    // The outer width, because Chrome's clientWidth on an input already leaves out the padding.
+    const edges = ["borderLeftWidth", "borderRightWidth", "paddingLeft", "paddingRight"] as const;
+    const room = input.getBoundingClientRect().width - edges.reduce((sum, k) => sum + parseFloat(box[k]), 0);
     return { size: parseFloat(style.fontSize), width: context.measureText(input.placeholder).width, room };
   });
   expect(hint.size).toBeLessThanOrEqual(14);
   expect(hint.size).toBeGreaterThanOrEqual(12);
   expect(hint.width).toBeLessThanOrEqual(hint.room);
   expect(await small.getByLabel(/Search by Member ID/).getAttribute("placeholder")).toBe("206383, Ghanshyam Pande, 9876543210");
-  // The Mark button has real space inside it, so the word and tick don't touch the edges.
-  const padded = small.getByRole("region", { name: "Not marked yet" }).getByRole("button", { name: "Mark Present" }).first();
-  expect(Number.parseFloat(await padded.evaluate((e) => getComputedStyle(e).paddingLeft))).toBeGreaterThanOrEqual(14);
   const dayTabs = small.getByRole("navigation", { name: "Event days" }).getByRole("button");
   const heights = await dayTabs.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
   expect(new Set(heights).size).toBe(1);
@@ -1830,15 +1829,17 @@ test("the marking screen: side by side on large screens, one at a time with a bo
   const longRow = small.getByRole("region", { name: "Search results" }).getByRole("listitem").filter({ hasText: "Jayantibhai Popatbhai Kanani" });
   await expect(longRow).toBeVisible();
   expect((await longRow.boundingBox())!.height).toBeLessThanOrEqual(84);
+  // The Mark button has real space inside it, so the word and tick don't touch the edges.
+  const padded = longRow.getByRole("button", { name: "Mark Present" });
+  expect(Number.parseFloat(await padded.evaluate((e) => getComputedStyle(e).paddingLeft))).toBeGreaterThanOrEqual(14);
   await small.getByLabel(/Search by Member ID/).fill("");
-  await expect(small.getByRole("region", { name: "Not marked yet" })).toBeVisible();
-  // Area and Quick Entry share one row, so the list starts high up the screen.
+  // Quick Entry is full width, below Area, and in view without scrolling.
   const areaBox = (await small.getByRole("combobox", { name: "Area", exact: true }).boundingBox())!;
   const quickBox = (await small.getByRole("button", { name: /Quick Entry/ }).boundingBox())!;
-  expect(Math.abs(areaBox.y - quickBox.y)).toBeLessThan(2);
-  const listTop = (await small.getByRole("region", { name: "Not marked yet" }).boundingBox())!.y;
-  expect(listTop).toBeLessThan(420);
-  await small.screenshot({ path: "test-results/screens/officer-320-list.png", fullPage: false });
+  expect(quickBox.y).toBeGreaterThan(areaBox.y + areaBox.height - 1);
+  expect(Math.abs(quickBox.width - areaBox.width)).toBeLessThan(2);
+  await expect(small.getByRole("button", { name: /Quick Entry/ })).toBeInViewport();
+  await small.screenshot({ path: "test-results/screens/officer-320-quick-entry.png", fullPage: false });
   await small.context().close();
 
   // Admin gets the same layout on the same screen.
@@ -1868,9 +1869,48 @@ test("the marking screen: side by side on large screens, one at a time with a bo
   // The bar never covers the last thing on the page.
   await phone.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   const barBox = (await bar.boundingBox())!;
-  const lastButton = (await phone.getByRole("region", { name: "Not marked yet" }).boundingBox())!;
+  const lastButton = (await phone.getByRole("button", { name: /Quick Entry/ }).boundingBox())!;
   expect(lastButton.y + lastButton.height).toBeLessThanOrEqual(barBox.y + 1);
   await phone.context().close();
+});
+
+test("the Install app button catches an early offer, prompts once, and explains when Chrome refuses", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  // A stand-in for Chrome's install offer, sent as soon as the page's HTML is read, before the app's code runs.
+  await context.addInitScript(() => {
+    const w = window as unknown as { prompts: number; refuse: boolean };
+    w.prompts = 0;
+    w.refuse = location.search.includes("refuse");
+    document.addEventListener("DOMContentLoaded", () => {
+      const offer = Object.assign(new Event("beforeinstallprompt", { cancelable: true }), {
+        prompt: async () => {
+          w.prompts += 1;
+          if (w.refuse) throw new DOMException("refused", "NotAllowedError");
+          await new Promise((done) => setTimeout(done, 300));
+        },
+        userChoice: Promise.resolve({ outcome: "accepted" }),
+      });
+      window.dispatchEvent(offer);
+    });
+  });
+  const page = await context.newPage();
+  await page.goto("/login");
+  const button = page.getByRole("button", { name: "Install app" });
+  await expect(button).toBeVisible();
+  // Two quick taps open one prompt, and the spent offer isn't kept.
+  await button.dblclick();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { prompts: number }).prompts)).toBe(1);
+  await expect(button).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // When Chrome refuses the prompt, the browser's own way to install is explained instead of nothing happening.
+  await page.goto("/login?refuse");
+  await page.getByRole("button", { name: "Install app" }).click();
+  const help = page.getByRole("dialog", { name: "Install from the browser menu" });
+  await expect(help).toBeVisible();
+  await help.getByRole("button", { name: "Done" }).click();
+  await expect(help).toHaveCount(0);
+  await context.close();
 });
 
 test("it installs as an app, and stores nothing personal on the device", async ({ browser, request }) => {

@@ -54,7 +54,8 @@ Mukta Vaani throughout: it covers Latin and Gujarati, and has true tabular figur
 - The marking screen shows attendance and history side by side from 1024px, with history staying in view. Below that, one at a time, with a bottom bar to switch.
 - It installs as an app. The service worker stores only code, icons and the offline page, never pages or replies with member details.
 - Touch targets are at least 44px on phones. Below `lg`, `DataTable` shows a list instead of a table, and every field is kept.
-- One main action per view: Mark Present is green, and everything else is quieter.
+- One main action per view: Mark Present is green, and everything else is quieter. The exception is Quick Entry on the marking screen: full width and filled, so officers find it at once.
+- Officers find people by search only. The "Not marked yet" list shows on Admin's marking screen, not on an officer's.
 - Totals show the person's own figure next to the whole: "My present" beside "Total present" for an officer, each officer beside "All officers" for Admin. Long lists show page numbers.
 - Confirmation appears beside the search box and toasts at the top of the screen, because a phone keyboard can hide the bottom.
 - Dropdowns are always `Select` or `CenterSelect`, never the browser's own `<select>` or `<datalist>`, which can't be styled and differ on every device. A filter in use is tinted, so it's clear why the numbers are narrowed.
