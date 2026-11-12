@@ -39,3 +39,8 @@ export function isUniqueViolation(err: unknown, constraint?: string): boolean {
   const e = err as { code?: string; constraint_name?: string };
   return e?.code === "23505" && (!constraint || e.constraint_name === constraint);
 }
+
+export function isCheckViolation(err: unknown, constraint?: string): boolean {
+  const e = err as { code?: string; constraint_name?: string };
+  return e?.code === "23514" && (!constraint || e.constraint_name === constraint);
+}

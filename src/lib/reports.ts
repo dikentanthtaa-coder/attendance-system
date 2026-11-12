@@ -5,7 +5,7 @@ import { getSql } from "./db";
 const IST = "Asia/Kolkata";
 
 const filterSchema = z.object({
-  event: z.enum(["all", "1", "2", "3"]).catch("all"),
+  event: z.string().regex(/^(all|[1-9]\d{0,4})$/).catch("all"),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).or(z.literal("all")).catch("all"),
   gender: z.enum(["all", "Male", "Female"]).catch("all"),
   center: z.string().max(80).catch("all"),
@@ -135,7 +135,8 @@ export async function getSummary(f: ReportFilters) {
 
 export async function getFilterOptions() {
   const sql = getSql();
-  const [centers, dates, officers] = await Promise.all([
+  const [events, centers, dates, officers] = await Promise.all([
+    sql`select event_day, name from event_sessions order by event_day`,
     sql`select distinct center from members order by center`,
     sql`
       select distinct ((marked_at at time zone ${IST})::date)::text as date
@@ -147,6 +148,7 @@ export async function getFilterOptions() {
       order by u.display_name`,
   ]);
   return {
+    events: events.map((r) => ({ day: r.event_day as number, name: r.name as string })),
     centers: centers.map((r) => r.center as string),
     dates: dates.map((r) => r.date as string),
     officers: officers.map((r) => ({ id: r.id as string, name: r.name as string })),

@@ -31,19 +31,20 @@ export function StatCard({
 }) {
   const look = STAT_TONES[tone];
   return (
-    <div className={`rounded-card border p-4 shadow-card ${look.box} ${className}`}>
-      <p className={`flex items-center gap-1.5 text-sm font-semibold ${look.label}`}>
+    <div className={`min-w-0 rounded-card border p-3.5 shadow-card sm:p-4 ${look.box} ${className}`}>
+      <p className={`flex items-start gap-1.5 text-sm leading-tight font-semibold ${look.label}`}>
         <Icon aria-hidden size={16} className="shrink-0" />
         {label}
       </p>
       <p className={`mt-1 font-bold tracking-tight ${tone === "hero" ? "text-4xl leading-11" : "text-3xl leading-10"}`} data-testid={testId}>{value}</p>
       {secondary && (
-        <p className={`mt-2 flex items-baseline gap-2 border-t pt-2 ${look.rule}`}>
+        // On a narrow card the label moves under its number whole, rather than breaking mid-phrase.
+        <p className={`mt-2 flex flex-wrap items-baseline gap-x-2 border-t pt-2 ${look.rule}`}>
           <span className="text-2xl leading-8 font-bold tracking-tight tabular-nums" data-testid={secondary.testId}>{secondary.value}</span>
-          <span className={`text-sm font-semibold ${look.label}`}>{secondary.label}</span>
+          <span className={`text-sm leading-tight font-semibold ${look.label}`}>{secondary.label}</span>
         </p>
       )}
-      {note && <p className={`text-xs ${look.note}`}>{note}</p>}
+      {note && <p className={`mt-1 text-xs leading-snug ${look.note}`}>{note}</p>}
     </div>
   );
 }
@@ -51,7 +52,7 @@ export function StatCard({
 /** Small labelled figures that belong together, such as an upload result. */
 export function StatList({ items }: { items: { label: string; value: ReactNode; tone?: "danger" | "ok" }[] }) {
   return (
-    <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <dl className={`grid grid-cols-2 gap-3 ${items.length === 5 ? "sm:grid-cols-3 lg:grid-cols-5" : "sm:grid-cols-4"}`}>
       {items.map((item) => (
         <div key={item.label} className={`rounded-control px-3 py-2.5 ${item.tone === "danger" ? "bg-danger-soft" : item.tone === "ok" ? "bg-ok-soft" : "bg-canvas"}`}>
           <dt className="text-sm text-muted">{item.label}</dt>

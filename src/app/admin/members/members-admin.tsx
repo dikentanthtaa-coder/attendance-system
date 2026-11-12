@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { CalendarCheck, Hash, MapPin, Pencil, Phone, SearchX, Trash2, Upload, UserPlus, UsersRound } from "lucide-react";
+import { CalendarCheck, FileUp, Hash, MapPin, Pencil, Phone, SearchX, Trash2, Upload, UserPlus, UsersRound } from "lucide-react";
 import { CenterSelect, centerName, centerValue, EMPTY_CENTER, type CenterValue } from "@/components/center-select";
 import { DigitsField } from "@/components/digits-field";
+import { PasswordConfirm } from "@/components/password-confirm";
 import {
   Alert,
   Badge,
@@ -40,6 +41,8 @@ type ImportSummary = {
   totalRows: number;
   imported: number;
   updated: number;
+  removed: number;
+  removedAttendance: number;
   errorRows: number;
   errors: { row: number; memberId: string; name: string; errors: string[] }[];
 };
@@ -63,25 +66,38 @@ const COLUMNS = ["No", "MemberID", "Name", "Mo.no.", "Gender", "Center"];
 export function MembersAdmin({ initial }: { initial: MemberPage }) {
   const toast = useToast();
   const [refreshKey, setRefreshKey] = useState(0);
-  // The Excel list is uploaded once. After that, people are added one at a time with Add Member.
   const [hasMembers, setHasMembers] = useState(initial.total > 0);
+  // The upload form is always one click away. A new file replaces the list from the last upload.
+  const [uploadOpen, setUploadOpen] = useState(false);
   // Keeps the card after an upload so its result can still be read, without the upload form.
   const [uploaded, setUploaded] = useState(false);
   const [adding, setAdding] = useState(false);
   const refresh = () => setRefreshKey((k) => k + 1);
+  const showForm = !hasMembers || uploadOpen;
   return (
     <>
       <PageHeader
         title="Members"
-        description={hasMembers ? "Search, correct or remove members, or add someone new." : "Upload the member list to begin. After that, add people one at a time."}
-        actions={hasMembers && <Button icon={UserPlus} onClick={() => setAdding(true)}>Add Member</Button>}
+        description={hasMembers ? "Search, correct or remove members, add someone new, or upload a new list." : "Upload the member list to begin. After that, add people one at a time."}
+        actions={
+          hasMembers && (
+            <>
+              <Button variant="secondary" icon={FileUp} aria-expanded={uploadOpen} onClick={() => setUploadOpen((o) => !o)}>Upload Excel</Button>
+              <Button icon={UserPlus} onClick={() => setAdding(true)}>Add Member</Button>
+            </>
+          )
+        }
       />
-      {(!hasMembers || uploaded) && (
+      {(showForm || uploaded) && (
         <UploadCard
-          showForm={!hasMembers}
+          showForm={showForm}
+          replacing={hasMembers}
+          onCancel={hasMembers ? () => setUploadOpen(false) : undefined}
           onImported={(summary) => {
             setUploaded(true);
+            setUploadOpen(false);
             if (summary.imported + summary.updated > 0) setHasMembers(true);
+            if (summary.removed > 0) toast("success", `Member list replaced. ${summary.removed} not in the new file removed.`);
             refresh();
           }}
         />
@@ -103,43 +119,92 @@ export function MembersAdmin({ initial }: { initial: MemberPage }) {
   );
 }
 
-function UploadCard({ showForm, onImported }: { showForm: boolean; onImported: (summary: ImportSummary) => void }) {
+function UploadCard({
+  showForm,
+  replacing,
+  onCancel,
+  onImported,
+}: {
+  showForm: boolean;
+  /** A list is already there, so this upload replaces it and needs Admin's password. */
+  replacing: boolean;
+  onCancel?: () => void;
+  onImported: (summary: ImportSummary) => void;
+}) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState<ImportSummary | null>(null);
+  const [askPassword, setAskPassword] = useState(false);
+
+  function chosenFile() {
+    const file = fileRef.current?.files?.[0];
+    if (!file) {
+      setError("Please choose an Excel file.");
+      return null;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError("The file is larger than 4 MB. Please split it into smaller files.");
+      return null;
+    }
+    return file;
+  }
+
+  /** Throws when the password is wrong, so the password dialog can show why and stay open. */
+  async function send(file: File, password: string | null) {
+    const form = new FormData();
+    form.append("file", file);
+    if (password !== null) form.append("password", password);
+    const result = await api<ImportSummary>("/api/admin/members/import", { body: form });
+    setSummary(result);
+    setAskPassword(false);
+    onImported(result);
+    if (fileRef.current) fileRef.current.value = "";
+    setFileName("");
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const file = fileRef.current?.files?.[0];
-    if (!file) return setError("Please choose an Excel file.");
-    if (file.size > MAX_UPLOAD_BYTES) return setError("The file is larger than 4 MB. Please split it into smaller files.");
-
-    setBusy(true);
+    if (!chosenFile()) return;
     setError("");
+    if (replacing) return setAskPassword(true);
+    setBusy(true);
     setSummary(null);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      const result = await api<ImportSummary>("/api/admin/members/import", { body: form });
-      setSummary(result);
-      onImported(result);
-      if (fileRef.current) fileRef.current.value = "";
-      setFileName("");
+      await send(chosenFile()!, null);
     } catch (err) {
-      setError((err as Error).message);
+      // Someone else uploaded a list meanwhile: this one now replaces it, so ask for the password.
+      if (err instanceof ClientApiError && err.code === "password_required") setAskPassword(true);
+      else setError((err as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function confirmReplace(password: string) {
+    const file = chosenFile();
+    if (!file) return setAskPassword(false);
+    try {
+      await send(file, password);
+    } catch (err) {
+      const code = err instanceof ClientApiError ? err.code : "";
+      if (code === "wrong_password" || code === "password_required") throw err;
+      // Anything else is about the file, so show it next to the file, not in the password box.
+      setAskPassword(false);
+      setError((err as Error).message);
     }
   }
 
   return (
     <Card aria-label="Excel upload">
       {showForm ? (
-        <CardHeader title="Upload member Excel" description="Gender can be M, F, Male or Female. Mo.no. can be blank. Uploading a MemberID that already exists updates that member." />
+        <CardHeader
+          title={replacing ? "Upload a new member list" : "Upload member Excel"}
+          description="Gender can be M, F, Male or Female. Mo.no. can be blank."
+        />
       ) : (
-        <CardHeader title="Member list uploaded" description="Add anyone else with Add Member." />
+        <CardHeader title="Member list uploaded" description="Add anyone else with Add Member, or upload a new list with Upload Excel." />
       )}
       <div className="flex flex-col gap-4 p-4 md:p-5">
         {showForm && (
@@ -148,6 +213,12 @@ function UploadCard({ showForm, onImported }: { showForm: boolean; onImported: (
               <span className="mr-1 text-sm font-semibold">First row must have:</span>
               {COLUMNS.map((c) => <Badge key={c} tone="brand">{c}</Badge>)}
             </div>
+            {replacing && (
+              <Alert tone="warn" title="This file replaces the member list you uploaded before.">
+                People in the new file keep their attendance. People from the earlier upload who aren&apos;t in it are removed, with their attendance.
+                Quick Members and people added with Add Member always stay.
+              </Alert>
+            )}
 
             <form onSubmit={submit} className="flex flex-col gap-3">
               <FileDrop
@@ -161,23 +232,32 @@ function UploadCard({ showForm, onImported }: { showForm: boolean; onImported: (
                   setError("");
                 }}
               />
-              <Button type="submit" icon={Upload} loading={busy} disabled={!fileName} className="self-end">
-                {busy ? "Uploading…" : "Upload file"}
-              </Button>
+              <div className="flex flex-wrap justify-end gap-2">
+                {onCancel && <Button variant="secondary" onClick={onCancel}>Cancel</Button>}
+                <Button type="submit" icon={Upload} loading={busy} disabled={!fileName}>
+                  {busy ? "Uploading…" : replacing ? "Upload and replace list" : "Upload file"}
+                </Button>
+              </div>
             </form>
           </>
         )}
 
         {error && <Alert tone="danger" title={error} />}
-
         {summary && (
           <div className={`flex flex-col gap-3 ${showForm ? "border-t border-rule pt-4" : ""}`} data-testid="import-summary">
             <p className="font-semibold break-all">Upload result: {summary.fileName}</p>
+            {summary.removed > 0 && (
+              <p className="text-sm text-muted">
+                {summary.removed} member{summary.removed === 1 ? "" : "s"} from the earlier upload weren&apos;t in this file and were removed
+                {summary.removedAttendance > 0 ? `, with ${summary.removedAttendance} attendance mark${summary.removedAttendance === 1 ? "" : "s"}` : ""}.
+              </p>
+            )}
             <StatList
               items={[
                 { label: "Total rows", value: summary.totalRows },
                 { label: "New members", value: summary.imported, tone: "ok" },
                 { label: "Updated", value: summary.updated },
+                { label: "Removed", value: summary.removed, tone: summary.removed > 0 ? "danger" : undefined },
                 { label: "Rows with errors", value: summary.errorRows, tone: summary.errorRows > 0 ? "danger" : undefined },
               ]}
             />
@@ -198,6 +278,20 @@ function UploadCard({ showForm, onImported }: { showForm: boolean; onImported: (
           </div>
         )}
       </div>
+      <PasswordConfirm
+        open={askPassword}
+        title="Replace member list"
+        confirmLabel="Replace List"
+        busyLabel="Uploading…"
+        icon={Upload}
+        onConfirm={confirmReplace}
+        onCancel={() => setAskPassword(false)}
+      >
+        <p>
+          Upload <strong className="break-all">{fileName}</strong> as the new member list? People from the earlier upload who aren&apos;t in this
+          file are removed, with their attendance. This can&apos;t be undone.
+        </p>
+      </PasswordConfirm>
     </Card>
   );
 }
@@ -319,7 +413,7 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
                     m.global_member_id ? { icon: Hash, label: m.global_member_id, strong: true } : null,
                     m.mobile ? { icon: Phone, label: m.mobile } : null,
                     { icon: MapPin, label: m.center },
-                    { icon: CalendarCheck, label: `Present ${m.attendance_count} of 3 days` },
+                    { icon: CalendarCheck, label: `Present on ${m.attendance_count} day${m.attendance_count === 1 ? "" : "s"}` },
                   ]}
                 />
               }

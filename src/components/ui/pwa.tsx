@@ -43,7 +43,16 @@ const subscribeInstall = (listener: () => void) => {
 };
 
 /** Shows only where the app can actually be installed, and never once it's running as an app. */
-export function InstallButton({ variant = "ghost", className = "" }: { variant?: ButtonVariant; className?: string }) {
+export function InstallButton({
+  variant = "ghost",
+  className = "",
+  alwaysLabelled = false,
+}: {
+  variant?: ButtonVariant;
+  className?: string;
+  /** In the menu drawer there's room for the words on every screen. */
+  alwaysLabelled?: boolean;
+}) {
   const mode = useSyncExternalStore(subscribeInstall, installSnapshot, () => null);
   const [help, setHelp] = useState<"ios" | "menu" | null>(null);
   // The help stays open even after the button has hidden itself.
@@ -70,7 +79,7 @@ export function InstallButton({ variant = "ghost", className = "" }: { variant?:
     <>
       {mode && (
         <Button variant={variant} icon={Download} aria-label="Install app" className={className} onClick={install}>
-          <span className="hidden sm:inline">Install app</span>
+          <span className={alwaysLabelled ? "" : "hidden sm:inline"}>Install app</span>
         </Button>
       )}
       <InstallHelp help={help} onClose={() => setHelp(null)} />

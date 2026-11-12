@@ -15,24 +15,30 @@ export function Alert({
   action,
   role,
   className = "",
+  inlineAction = false,
   children,
 }: {
   tone: "danger" | "warn" | "ok" | "info";
   title?: ReactNode;
   action?: ReactNode;
+  /** Keep a small action, such as a time, beside the message even on phones. */
+  inlineAction?: boolean;
   role?: AriaRole;
   className?: string;
   children?: ReactNode;
 }) {
   const { box, icon: Icon, role: defaultRole } = ALERT_TONES[tone];
   return (
-    <div role={role ?? defaultRole} className={`flex items-start gap-2.5 rounded-control border px-3.5 py-3 text-sm ${box} ${className}`}>
+    // On phones the action drops under the message at full width, instead of squeezing it into a narrow column.
+    <div role={role ?? defaultRole} className={`flex items-start gap-x-2.5 gap-y-2.5 rounded-control border px-3.5 py-3 text-sm ${inlineAction ? "" : "max-sm:flex-wrap"} ${box} ${className}`}>
       <Icon aria-hidden size={18} className="mt-0.5 shrink-0" />
       <div className="min-w-0 flex-1">
         {title && <p className="font-semibold break-words">{title}</p>}
         {children && <div className={`text-ink ${title ? "mt-1" : ""}`}>{children}</div>}
       </div>
-      {action && <div className="shrink-0 self-center text-ink">{action}</div>}
+      {action && (
+        <div className={`shrink-0 self-center text-ink ${inlineAction ? "" : "max-sm:basis-full max-sm:[&>*]:w-full"}`}>{action}</div>
+      )}
     </div>
   );
 }

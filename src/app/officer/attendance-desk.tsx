@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CalendarClock, CircleCheck, Hash, History, ListChecks, Lock, MapPin, Phone, Search, UserCheck, UserPlus, UsersRound } from "lucide-react";
+import { CalendarClock, CircleCheck, Hash, History, Lock, MapPin, Phone, Search, UserCheck, UserPlus, UsersRound } from "lucide-react";
 import { EventDayTabs } from "@/components/event-days";
-import { Alert, Badge, Button, Card, CardHeader, EmptyState, Field, GenderBadge, MetaList, Pagination, PersonRow, SearchInput, Select, Skeleton, Spinner, StatCard, useToast } from "@/components/ui";
+import { Alert, Badge, Button, Card, EmptyState, Field, GenderBadge, MetaList, PersonRow, SearchInput, Select, Spinner, StatCard, useToast } from "@/components/ui";
 import { api, ClientApiError } from "@/lib/client-api";
 import { formatTime, STATUS_LABEL, type EventSession, type Gender } from "@/lib/shared";
 import { OfficerHistory, type HistoryPage } from "./officer-history";
@@ -46,9 +46,11 @@ export function AttendanceDesk({ initial, officerGender = null }: { initial: Des
   // null means "follow whichever event is active".
   const [chosenDay, setChosenDay] = useState<number | null>(null);
 
-  const activeDay = events.find((e) => e.status === "active")?.event_day ?? null;
-  const selectedDay = chosenDay ?? activeDay ?? 1;
-  const selected = events.find((e) => e.event_day === selectedDay)!;
+  const active = events.find((e) => e.status === "active");
+  const activeDay = active?.event_day ?? null;
+  // A chosen session Admin has since removed falls back to the active one, then the first.
+  const selected = events.find((e) => e.event_day === chosenDay) ?? active ?? events[0];
+  const selectedDay = selected.event_day;
   const count = counts[selectedDay] ?? NO_COUNT;
 
   // Phones and tablets show one side at a time. Large screens show both, so this does nothing there.
@@ -107,7 +109,7 @@ export function AttendanceDesk({ initial, officerGender = null }: { initial: Des
                     ? "This event has ended, so attendance can no longer be marked."
                     : "Attendance can be marked after Admin starts this event."
                 }
-                action={activeDay && <Button onClick={() => setChosenDay(activeDay)}>Go to Day {activeDay}, which is active</Button>}
+                action={active && <Button onClick={() => setChosenDay(active.event_day)}>Go to {active.name}, which is active</Button>}
               />
             </Card>
           )}
@@ -157,10 +159,10 @@ function Totals({ event, count }: { event: EventSession; count: DayCount }) {
 
 function MarkingHeading({ event, count }: { event: EventSession; count: DayCount }) {
   return (
-    <div className="flex items-center justify-between gap-3 bg-brand px-4 py-2.5 text-white">
-      {/* The full name stays for screen readers, and one short line on phones. */}
-      <h1 className="text-lg leading-tight font-bold whitespace-nowrap sm:text-xl">
-        Marking <span className="max-sm:sr-only">Gyansatr </span>Day {event.event_day}
+    // The count drops to its own line when the name needs the room, so the name isn't cut short.
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 bg-brand px-4 py-2.5 text-white">
+      <h1 className="max-w-full min-w-0 truncate text-lg leading-tight font-bold sm:text-xl">
+        Marking {event.name}
       </h1>
       <p className="flex shrink-0 items-baseline gap-1.5" data-testid="present-count">
         <span className="text-3xl leading-none font-bold">{count.myPresent}</span>
@@ -192,10 +194,7 @@ function MarkingPanel({
   const [prefill, setPrefill] = useState<QuickEntryPrefill | null>(null);
   const [latest, setLatest] = useState<Marked | null>(null);
   const [unmarked, setUnmarked] = useState(initialUnmarked);
-  const [unmarkedPage, setUnmarkedPage] = useState(1);
   const [area, setArea] = useState("all");
-  // Someone just marked leaves the list at once, before the refreshed list arrives.
-  const [justMarked, setJustMarked] = useState<ReadonlySet<number>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const nextKey = useRef(0);
 
@@ -230,20 +229,15 @@ function MarkingPanel({
     };
   }, [trimmed, searchKey, area, event.event_day]);
 
-  const version = String(count.present);
-  // Officers find people by search only, so the list stays off their screen. Admin keeps it.
-  const showList = officerGender === null;
-  // Officers still need the area names, which come with the first page, so theirs is fetched once.
-  const listQuery = showList ? `page=${unmarkedPage}&center=${encodeURIComponent(area)}` : "page=1&center=all";
-  const listVersion = showList ? version : "";
-
+  // Everyone finds people by search, so there's no list of who isn't marked yet. The area names
+  // still come with that list's first page, so it's fetched once per day.
   useEffect(() => {
     const controller = new AbortController();
-    api<UnmarkedPage>(`/api/officer/unmarked?day=${event.event_day}&${listQuery}`, { signal: controller.signal })
+    api<UnmarkedPage>(`/api/officer/unmarked?day=${event.event_day}&page=1&center=all`, { signal: controller.signal })
       .then(setUnmarked)
-      .catch(() => {}); // the list on screen stays, and the next change tries again
+      .catch(() => {}); // the areas on screen stay, and the next day change tries again
     return () => controller.abort();
-  }, [event.event_day, listQuery, listVersion]);
+  }, [event.event_day]);
 
   const clearSearch = () => {
     setQuery("");
@@ -265,7 +259,6 @@ function MarkingPanel({
       const res = await api<MarkResponse>("/api/officer/attendance", {
         json: { memberId: member.id, eventDay: event.event_day },
       });
-      setJustMarked((ids) => new Set(ids).add(member.id));
       if (res.status === "marked") {
         remember("Present", res.memberName, res.markedAt);
         onChanged();
@@ -363,6 +356,7 @@ function MarkingPanel({
           tone="ok"
           role="status"
           className="rise-in"
+          inlineAction
           title={`${latest.label}: ${latest.name}`}
           action={<span className="text-sm font-semibold text-ok">{formatTime(latest.at)}</span>}
         />
@@ -376,10 +370,7 @@ function MarkingPanel({
             value={area}
             active={area !== "all"}
             options={[{ value: "all", label: "All Areas" }, ...(unmarked?.centers ?? []).map((c) => ({ value: c, label: c }))]}
-            onChange={(value) => {
-              setArea(value);
-              setUnmarkedPage(1);
-            }}
+            onChange={setArea}
           />
         </Field>
         {/* Full width and filled, so it's easy to find for someone who isn't on the list. */}
@@ -416,30 +407,6 @@ function MarkingPanel({
         </Card>
       )}
 
-      {showList && !trimmed && (
-        <Card aria-label="Not marked yet" className="overflow-hidden">
-          <CardHeader
-            title={<span className="inline-flex items-center gap-2"><ListChecks aria-hidden size={16} className="text-muted" />Not marked yet{unmarked ? ` (${unmarked.total})` : ""}</span>}
-            description={<span className="max-sm:hidden">Tap Mark next to a person to mark them present.</span>}
-          />
-          {!unmarked && (
-            <div aria-hidden className="flex flex-col gap-3 p-4">
-              {[0, 1, 2].map((i) => <Skeleton key={i} className="h-11" />)}
-            </div>
-          )}
-          {unmarked && unmarked.total === 0 && (
-            <EmptyState icon={ListChecks} titleAs="p" title={area === "all" ? "Everyone has been marked" : `Everyone in ${area} has been marked`} description="If someone isn't on the member list, add them with Quick Entry." />
-          )}
-          {unmarked && unmarked.total > 0 && (
-            <ul className="divide-y divide-rule">
-              {unmarked.members.filter((m) => !justMarked.has(m.id)).map((member) => (
-                <li key={member.id}><MemberRow member={member} busy={markingId === member.id} disabled={markingId !== null} showGender={officerGender === null} onMark={mark} /></li>
-              ))}
-            </ul>
-          )}
-          {unmarked && <Pagination page={unmarkedPage} pageSize={unmarked.pageSize} total={unmarked.total} onPage={setUnmarkedPage} />}
-        </Card>
-      )}
 
     </>
   );

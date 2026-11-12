@@ -12,7 +12,7 @@ const filterSchema = z.object({
   gender: z.enum(["all", "Male", "Female"]).catch("all"),
   center: z.string().max(80).catch("all"),
   // "all", or a day and status together: "P:1" is present on Day 1, "A:2" is absent on Day 2.
-  show: z.string().regex(/^(all|[PA]:[1-3])$/).catch("all"),
+  show: z.string().regex(/^(all|[PA]:[1-9]\d{0,4})$/).catch("all"),
 });
 
 export type DayReportFilters = z.output<typeof filterSchema>;
@@ -43,14 +43,14 @@ const memberWhere = (sql: Sql, f: DayReportFilters) => {
 /** Which members to list. "Absent on Day N" means not marked present that day. */
 const showWhere = (sql: Sql, f: DayReportFilters) => {
   if (f.show === "all") return sql`true`;
-  const day = Number(f.show[2]);
+  const day = Number(f.show.slice(2));
   const marked = sql`exists (select 1 from attendance a where a.member_id = m.id and a.event_day = ${day} and a.status = 'present')`;
   return f.show[0] === "P" ? marked : sql`not ${marked}`;
 };
 
 /**
- * A day gets a column once it has started, so the report grows from Day 1, to Days 1 and 2, to all
- * three. A is never stored: it's worked out from there being no mark once the day has ended.
+ * A day gets a column once it has started, so the report grows from Day 1, to Days 1 and 2, to every
+ * session. A is never stored: it's worked out from there being no mark once the day has ended.
  */
 async function reportDays(sql: Sql) {
   const days = await sql`select event_day, name, status from event_sessions where status <> 'not_started' order by event_day`;
@@ -108,7 +108,11 @@ const QUICK_FILL = "FFFDF1D6";
 
 export async function buildDayReportExport(f: DayReportFilters) {
   const sql = getSql();
-  const [days, rows] = await Promise.all([reportDays(sql), rowsQuery(sql, f)]);
+  const [days, rows, [{ sessions }]] = await Promise.all([
+    reportDays(sql),
+    rowsQuery(sql, f),
+    sql`select count(*)::int as sessions from event_sessions`,
+  ]);
 
   const workbook = new ExcelJS.Workbook();
   workbook.created = new Date();
@@ -121,7 +125,7 @@ export async function buildDayReportExport(f: DayReportFilters) {
     { header: "Gender", width: 9 },
     { header: "Center", width: 18 },
     { header: "Status", width: 15 },
-    ...days.map((d) => ({ header: `Day ${d.day}`, width: 8 })),
+    ...days.map((d) => ({ header: d.name, width: Math.max(8, Math.min(24, d.name.length + 2)) })),
     { header: "Days Present", width: 13 },
   ];
   const header = sheet.getRow(1);
@@ -170,6 +174,6 @@ export async function buildDayReportExport(f: DayReportFilters) {
   summary.addRow(["P = present. A = absent. - = day still running, not marked yet."]);
   summary.addRow([`Present + ${SOURCE_LABEL.quick_entry} = Total Present.`]);
 
-  const part = days.length === 3 ? "all-days" : days.length === 0 ? "no-days" : `day-${days.map((d) => d.day).join("-")}`;
+  const part = days.length > 0 && days.length === sessions ? "all-days" : days.length === 0 ? "no-days" : `day-${days.map((d) => d.day).join("-")}`;
   return { buffer: await workbook.xlsx.writeBuffer(), fileName: `attendance_report_${part}.xlsx` };
 }

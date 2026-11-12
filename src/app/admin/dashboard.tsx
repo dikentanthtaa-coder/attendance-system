@@ -6,6 +6,7 @@ import { Alert, Button, Card, CardHeader, Field, LinkButton, Select, StatCard, t
 import { api } from "@/lib/client-api";
 import { formatDate, formatTime, SOURCE_LABEL } from "@/lib/shared";
 import { DayChart, type DayRow } from "./day-chart";
+import { ATTENDANCE_CHANGED } from "./clear-attendance";
 
 type Filters = { event: string; date: string; gender: string; center: string; source: string; officer: string };
 
@@ -29,17 +30,10 @@ type Summary = {
 
 type Report = {
   summary: Summary;
-  options: { centers: string[]; dates: string[]; officers: { id: string; name: string }[] };
+  options: { events: { day: number; name: string }[]; centers: string[]; dates: string[]; officers: { id: string; name: string }[] };
 };
 
 const REFRESH_MS = 10000;
-
-const EVENT_OPTIONS: SelectOption[] = [
-  { value: "all", label: "All Days" },
-  { value: "1", label: "Gyansatr Day 1" },
-  { value: "2", label: "Gyansatr Day 2" },
-  { value: "3", label: "Gyansatr Day 3" },
-];
 
 const GENDER_OPTIONS: SelectOption[] = [
   { value: "all", label: "All" },
@@ -81,7 +75,10 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") load(controller.signal);
     }, REFRESH_MS);
+    const now = () => load(controller.signal);
+    window.addEventListener(ATTENDANCE_CHANGED, now);
     return () => {
+      window.removeEventListener(ATTENDANCE_CHANGED, now);
       clearTimeout(initial);
       clearInterval(interval);
       controller.abort();
@@ -104,7 +101,13 @@ export function Dashboard({ initial, generatedAt }: { initial: Report; generated
 
       <Card aria-label="Filters" className={`${filtersOpen ? "block" : "hidden"} p-4 md:block`}>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-          <FilterSelect id="f-event" label="Event" value={filters.event} onChange={(v) => setFilter("event", v)} options={EVENT_OPTIONS} />
+          <FilterSelect
+            id="f-event"
+            label="Event"
+            value={filters.event}
+            onChange={(v) => setFilter("event", v)}
+            options={[{ value: "all", label: "All Days" }, ...report.options.events.map((e) => ({ value: String(e.day), label: e.name }))]}
+          />
           <FilterSelect
             id="f-date"
             label="Date"
@@ -189,9 +192,14 @@ function SummaryCards({ s }: { s: Summary }) {
       <StatCard tone="female" icon={Venus} label="Total Female" value={s.members.female} testId="stat-members-female" secondary={{ label: "Present Female", value: s.female, testId: "stat-female" }} />
       <StatCard
         icon={Scale}
-        label="Male minus Female"
-        value={difference === 0 ? "0" : `${difference > 0 ? "+" : "−"}${Math.abs(difference)}`}
-        note={difference === 0 ? "Equal" : `${Math.abs(difference)} more ${difference > 0 ? "male" : "female"} attendees`}
+        label="Male vs Female"
+        // Both numbers side by side read at a glance; a bare "+15" left Admin guessing what it meant.
+        value={`${s.male} : ${s.female}`}
+        note={
+          difference === 0
+            ? "Same number of male and female present"
+            : `${Math.abs(difference)} more ${difference > 0 ? "male" : "female"} than ${difference > 0 ? "female" : "male"} present`
+        }
         testId="stat-difference"
       />
       <StatCard

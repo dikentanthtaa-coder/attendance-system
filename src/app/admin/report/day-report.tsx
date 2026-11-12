@@ -81,8 +81,8 @@ export function DayReport({ initial }: { initial: Report }) {
   const showOptions: SelectOption[] = [
     { value: "all", label: "Everyone" },
     ...days.flatMap((d) => [
-      { value: `P:${d.day}`, label: `Present on Day ${d.day}` },
-      { value: `A:${d.day}`, label: d.status === "ended" ? `Absent on Day ${d.day}` : `Not marked yet on Day ${d.day}` },
+      { value: `P:${d.day}`, label: `Present on ${d.name}` },
+      { value: `A:${d.day}`, label: d.status === "ended" ? `Absent on ${d.name}` : `Not marked yet on ${d.name}` },
     ]),
   ];
 
@@ -93,7 +93,7 @@ export function DayReport({ initial }: { initial: Report }) {
     { key: "gender", header: "Gender", cell: (r) => <GenderBadge gender={r.gender} /> },
     { key: "center", header: "Center", cell: (r) => <span className="text-muted">{r.center}</span> },
     { key: "status", header: "Status", cell: (r) => <SourceBadge source={r.created_source} /> },
-    ...days.map((d): Column<Row> => ({ key: `day-${d.day}`, header: `Day ${d.day}`, align: "right", cell: (r) => <DayCellBadge value={r.cells[d.day]} /> })),
+    ...days.map((d): Column<Row> => ({ key: `day-${d.day}`, header: d.name, align: "right", cell: (r) => <DayCellBadge value={r.cells[d.day]} /> })),
   ];
 
   return (
@@ -105,7 +105,7 @@ export function DayReport({ initial }: { initial: Report }) {
       />
 
       {days.length === 0 ? (
-        <Card><EmptyState icon={CalendarClock} titleAs="p" title="No day has started yet" description="The report begins when you start Day 1 on the Dashboard." /></Card>
+        <Card><EmptyState icon={CalendarClock} titleAs="p" title="No day has started yet" description="The report begins when you start a session on the Dashboard." /></Card>
       ) : (
         <section aria-label="Totals by day" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {days.map((d) => (
@@ -167,7 +167,6 @@ export function DayReport({ initial }: { initial: Report }) {
               <PersonRow
                 name={r.name}
                 gender={r.gender}
-                nameBadge={<GenderBadge gender={r.gender} />}
                 meta={
                   <MetaList
                     items={[
@@ -177,14 +176,19 @@ export function DayReport({ initial }: { initial: Report }) {
                     ]}
                   />
                 }
+                nameBadge={<GenderBadge gender={r.gender} />}
                 footer={
                   <>
                     <SourceBadge source={r.created_source} />
-                    {days.map((d) => (
-                      <span key={d.day} className="inline-flex items-center gap-1 text-xs text-muted">
-                        Day {d.day} <DayCellBadge value={r.cells[d.day]} />
-                      </span>
-                    ))}
+                    {/* One tidy chip per day, two to a row, instead of words and badges wrapping into each other. */}
+                    <ul aria-label="Attendance by day" className="mt-0.5 grid w-full grid-cols-2 gap-1.5 sm:grid-cols-3">
+                      {days.map((d) => (
+                        <li key={d.day} className="flex min-w-0 items-center justify-between gap-2 rounded-control bg-canvas py-1 pr-1 pl-2.5">
+                          <span className="truncate text-xs font-medium text-muted">{d.name}</span>
+                          <DayCellBadge value={r.cells[d.day]} />
+                        </li>
+                      ))}
+                    </ul>
                   </>
                 }
               />

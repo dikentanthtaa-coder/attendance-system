@@ -62,8 +62,8 @@ export async function addMember(admin: SessionUser, input: z.output<typeof addMe
       if (globalId) await refuseTakenMemberId(tx, admin, globalId);
       await refuseDuplicates(tx, admin, input.name, input.mobile, input.confirmDuplicate);
       const [member] = await tx`
-        insert into members (global_member_id, name, mobile, gender, center, created_source, created_by)
-        values (${globalId}, ${input.name}, ${input.mobile}, ${input.gender}, ${input.center}, 'excel_import', ${admin.id})
+        insert into members (global_member_id, name, mobile, gender, center, created_source, created_by, added_by_hand)
+        values (${globalId}, ${input.name}, ${input.mobile}, ${input.gender}, ${input.center}, 'excel_import', ${admin.id}, true)
         returning id, name`;
       await writeAudit(tx, admin, "member.add", member.id, {
         name: member.name,

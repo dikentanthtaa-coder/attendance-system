@@ -30,7 +30,12 @@ async function requireActiveEvent(tx: Sql, eventDay: number) {
   }
 }
 
-export const eventDaySchema = z.coerce.number().int().min(1).max(3);
+export const eventDaySchema = z.coerce.number().int().min(1).max(32767);
+
+export const eventNameSchema = z
+  .string()
+  .transform((v) => v.trim().replace(/\s+/g, " "))
+  .pipe(z.string().min(1, "Please type a name for the session.").max(60, "Keep the session name to 60 characters or fewer."));
 
 /** A person's whole name matches when each typed piece starts a word, in the same order. */
 function escapeRegex(value: string) {
@@ -340,7 +345,7 @@ export async function listDayCounts(user: Pick<SessionUser, "id">) {
 /** Everything the marking screen shows first, so it arrives with the page, not after it. */
 export async function getDeskData(user: SessionUser) {
   const events = await listEvents();
-  const day = events.find((e) => e.status === "active")?.event_day ?? 1;
+  const day = events.find((e) => e.status === "active")?.event_day ?? events[0]?.event_day ?? 1;
   const [counts, history, unmarked] = await Promise.all([listDayCounts(user), listHistory(user, day, "mine", 1), listUnmarked(user, day, 1)]);
   return JSON.parse(JSON.stringify({ events, counts, day, history, unmarked }));
 }

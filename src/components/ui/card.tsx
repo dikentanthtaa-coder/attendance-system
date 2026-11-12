@@ -25,9 +25,10 @@ export function PageHeader({ title, description, actions }: { title: string; des
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div className="min-w-0">
         <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
-        {description && <p className="mt-0.5 text-muted">{description}</p>}
+        {description && <p className="mt-0.5 text-sm text-muted sm:text-base">{description}</p>}
       </div>
-      {actions}
+      {/* Phones: the buttons share one full-width row, each the same size. */}
+      {actions && <div className="grid w-full auto-cols-fr grid-flow-col gap-2 sm:flex sm:w-auto sm:flex-wrap">{actions}</div>}
     </div>
   );
 }

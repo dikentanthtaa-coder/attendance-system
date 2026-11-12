@@ -49,6 +49,12 @@ async function loginPage(browser: Browser, username: string, viewport?: { width:
 }
 
 const apiOf = (page: Page) => page.context().request;
+/** Log out is in the header on large screens, and in the menu drawer below 1024px. */
+const logOutOf = async (page: Page) => {
+  const menu = page.getByRole("button", { name: "Open menu" });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole("button", { name: "Log out" }).filter({ visible: true }).click();
+};
 /** Phones show marking and history one at a time. Large screens show both, with no bar to tap. */
 const showView = async (page: Page, name: "Mark" | "History") => {
   const bar = page.getByRole("navigation", { name: "Marking view" });
@@ -65,10 +71,24 @@ const pick = async (page: Page, label: string, option: string) => {
   await page.getByLabel(label, { exact: true }).click();
   await page.getByRole("option", { name: option, exact: true }).click();
 };
-const upload = (api: APIRequestContext, buffer: Buffer, name = "members.xlsx") =>
+const upload = (api: APIRequestContext, buffer: Buffer, name = "members.xlsx", password = TEST_PASSWORD) =>
   api.post("/api/admin/members/import", {
-    multipart: { file: { name, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer } },
+    multipart: { file: { name, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer }, password },
   });
+/**
+ * An upload replaces the list uploaded before it, so a later file in these tests also lists everyone
+ * already uploaded, as Admin's full list would. People `rows` already lists are left out.
+ */
+const alsoUploaded = async (rows: unknown[][] = []) => {
+  const ids = new Set(rows.map((r) => String(r[1])).filter(Boolean));
+  const names = new Set(rows.map((r) => String(r[2]).toLowerCase()));
+  const members = await db`
+    select global_member_id, name, mobile, gender, center from members
+    where created_source = 'excel_import' and not added_by_hand order by id`;
+  return members
+    .filter((m) => !(m.global_member_id && ids.has(m.global_member_id)) && !names.has(m.name.toLowerCase()))
+    .map((m) => [0, m.global_member_id ?? "", m.name, m.mobile ?? "", m.gender, m.center]);
+};
 const setEvent = (api: APIRequestContext, day: number, action: string) =>
   api.post(`/api/admin/events/${day}`, { data: { action } });
 const mark = (api: APIRequestContext, memberId: number, eventDay: number, extra: object = {}) =>
@@ -269,7 +289,7 @@ test("Excel upload in the UI: summary, invalid row details, and no duplicates on
   await admin.getByRole("button", { name: "Upload file" }).click();
   const summary = admin.getByTestId("import-summary");
   await expect(summary).toBeVisible();
-  await expect(summary.locator("dd")).toHaveText(["9", "5", "0", "4"]);
+  await expect(summary.locator("dd")).toHaveText(["9", "5", "0", "0", "4"]);
   // Once the list is in, the upload form goes and Add Member takes its place. The result stays to read.
   await expect(admin.getByRole("button", { name: "Upload file" })).toHaveCount(0);
   await expect(admin.getByRole("button", { name: "Add Member" })).toBeVisible();
@@ -283,11 +303,12 @@ test("Excel upload in the UI: summary, invalid row details, and no duplicates on
   expect(raju).toMatchObject({ mobile: "9876500002", center: "Varachha", gender: "Male" });
 
   const before = (await db`select count(*)::int as n from members`)[0].n;
-  const again = await (await upload(adminApi, await xlsx([
+  const changed = [
     [1, 2051, "Ramesh K Patel", 9876500001, "Male", "Varachha"],
     [2, "", "No Id Man", "9876500005", "Male", "Navsari"],
-  ]))).json();
-  expect(again).toMatchObject({ totalRows: 2, imported: 0, updated: 2, errorRows: 0 });
+  ];
+  const again = await (await upload(adminApi, await xlsx([...changed, ...(await alsoUploaded(changed))]))).json();
+  expect(again).toMatchObject({ totalRows: 5, imported: 0, updated: 5, removed: 0, errorRows: 0 });
   expect((await db`select count(*)::int as n from members`)[0].n).toBe(before);
   expect((await db`select name from members where global_member_id = '2051'`)[0].name).toBe("Ramesh K Patel");
   expect((await db`select center from members where name = 'No Id Man'`)[0].center).toBe("Navsari");
@@ -303,8 +324,9 @@ test("Excel upload: real-world files with M and F, and people with no mobile num
     [6, "", "No Mobile Noid", "", "F", "Vapi"], // listed twice, so it's a mistake to show
     [7, 6007, "Wrong Number", "12345", "M", "Vapi"], // a wrong number is still an error
   ];
-  const first = await (await upload(adminApi, await xlsx(rows, ["No", "MemberID", "Name", "Mo.no", "Gender", "Center"]))).json();
-  expect(first).toMatchObject({ totalRows: 7, imported: 5, updated: 0, errorRows: 2 });
+  const earlier = await alsoUploaded(rows);
+  const first = await (await upload(adminApi, await xlsx([...rows, ...earlier], ["No", "MemberID", "Name", "Mo.no", "Gender", "Center"]))).json();
+  expect(first).toMatchObject({ totalRows: 7 + earlier.length, imported: 5, updated: earlier.length, removed: 0, errorRows: 2 });
   expect(first.errors.map((e: { row: number }) => e.row)).toEqual([7, 8]);
   expect(first.errors[0].errors[0]).toContain("repeated");
   expect(first.errors[1].errors[0]).toContain("not a valid 10-digit number");
@@ -321,12 +343,13 @@ test("Excel upload: real-world files with M and F, and people with no mobile num
   // Uploading the same file again adds nobody, even those with neither an ID nor a number.
   const count = async () => (await db`select count(*)::int as n from members`)[0].n;
   const before = await count();
-  const again = await (await upload(adminApi, await xlsx(rows))).json();
-  expect(again).toMatchObject({ imported: 0, updated: 5, errorRows: 2 });
+  const again = await (await upload(adminApi, await xlsx([...rows, ...earlier]))).json();
+  expect(again).toMatchObject({ imported: 0, updated: 5 + earlier.length, removed: 0, errorRows: 2 });
   expect(await count()).toBe(before);
 
   // A blank in a later file doesn't erase a number already on record.
-  await upload(adminApi, await xlsx([[1, 6001, "Mita Letter", "", "F", "Vapi"]]));
+  const blank = [[1, 6001, "Mita Letter", "", "F", "Vapi"]];
+  await upload(adminApi, await xlsx([...blank, ...(await alsoUploaded(blank))]));
   expect((await db`select mobile from members where global_member_id = '6001'`)[0].mobile).toBe("9876560001");
 
   // Someone with no number can still be found, edited and shown on every screen.
@@ -612,7 +635,7 @@ test("one login works on five devices at once, with no errors, and they all stay
   for (const d of devices) await expect(d.getByTestId("stat-my-present")).toHaveText(String(total), { timeout: 8000 });
 
   // Logging out on one device leaves the others logged in.
-  await devices[4].getByRole("button", { name: "Log out" }).click();
+  await logOutOf(devices[4]);
   await devices[4].waitForURL("**/login");
   for (const d of devices.slice(0, 4)) expect((await apiOf(d).get("/api/events")).status()).toBe(200);
 
@@ -847,8 +870,10 @@ test("Quick Entry on the server: forged gender ignored, confirmation required, O
   // A later Excel file supplying an ID links to the Quick Entry member instead of duplicating.
   const ok = await quick(officerApi, { name: "Later Linked", mobile: "9000000004" });
   expect(ok.status()).toBe(200);
-  const res = await (await upload(adminApi, await xlsx([[1, "7001", "later linked", "9000000004", "Male", "Vapi"]]))).json();
-  expect(res).toMatchObject({ imported: 0, updated: 1 });
+  const linkRow = [[1, "7001", "later linked", "9000000004", "Male", "Vapi"]];
+  const others = await alsoUploaded(linkRow);
+  const res = await (await upload(adminApi, await xlsx([...linkRow, ...others]))).json();
+  expect(res).toMatchObject({ imported: 0, updated: 1 + others.length, removed: 0 });
   const linked = await db`select global_member_id, created_source from members where mobile = '9000000004'`;
   expect(linked.length).toBe(1);
   expect(linked[0]).toMatchObject({ global_member_id: "7001", created_source: "quick_entry" });
@@ -905,7 +930,7 @@ test("totals and history: each officer sees their own and the whole, and a new m
   await expect(history).not.toContainText("History Hari", { timeout: 8000 });
   await showView(officer, "Mark");
   expect((await mark(officerApi, await memberId("4004"), 1)).status()).toBe(200);
-  expect((await officerApi.get("/api/officer/history?day=9")).status()).toBe(400);
+  expect((await officerApi.get("/api/officer/history?day=0")).status()).toBe(400);
 
   // Admin: every officer's own total, the entire total, and one click to their history.
   await admin.goto("/admin");
@@ -953,47 +978,24 @@ test("Mark Present is offered without searching, with page numbers, for Admin on
   await expect(officer.getByRole("region", { name: "Search results" })).toContainText("Aaru First");
   await officer.screenshot({ path: "test-results/screens/officer-no-list.png", fullPage: true });
 
-  // Admin: a tab and a shortcut to the same screen, with the list of who's left, covering everyone.
+  // Admin: a tab and a shortcut to the same screen. Like officers, Admin finds people by search, with no list.
   await admin.goto("/admin");
   await admin.getByRole("main").getByRole("link", { name: "Mark Attendance" }).click();
   await admin.waitForURL("**/admin/mark");
   await expect(admin.getByRole("heading", { name: /^Marking Gyansatr Day/ })).toHaveCount(1);
   await expect(admin.getByRole("button", { name: /Absent/ })).toHaveCount(0);
-  const list = admin.getByRole("region", { name: "Not marked yet" });
-  const expected = async () => (await db`
-    select count(*)::int as n from members m where not exists (
-      select 1 from attendance a where a.member_id = m.id and a.event_day = 1 and a.status = 'present')`)[0].n as number;
-  await expect(list.getByRole("heading")).toContainText(`(${await expected()})`);
-  const row = list.getByRole("listitem").filter({ hasText: "Aaditi Second" });
+  await expect(admin.getByRole("region", { name: "Not marked yet" })).toHaveCount(0);
+  // The area names still arrive, for narrowing a search.
+  await pick(admin, "Area", "Varachha");
+  await pick(admin, "Area", "All Areas");
+  await admin.getByLabel(/Search by Member ID/).fill("5002");
+  const row = admin.getByRole("region", { name: "Search results" }).getByRole("listitem").filter({ hasText: "Aaditi Second" });
   await row.getByRole("button", { name: "Mark Present" }).click();
   await expect(admin.getByRole("status")).toContainText("Present: Aaditi Second");
-  await expect(row).toHaveCount(0);
-  await expect(list.getByRole("heading")).toContainText(`(${await expected()})`);
   await admin.screenshot({ path: "test-results/screens/admin-mark.png", fullPage: true });
   expect(await statusOf(second)).toBe("present");
   const adminHistory = admin.getByRole("region", { name: "Attendance history" });
   await expect(adminHistory.getByRole("listitem").filter({ hasText: "Aaditi Second" })).toContainText("You");
-
-  // Page numbers, once there's more than one page.
-  await Promise.all(Array.from({ length: 25 }, (_, i) => add(`90${10 + i}`, `Zzz Page${10 + i}`, `98765900${10 + i}`)));
-  await admin.reload();
-  const pages = list.getByRole("navigation", { name: "Pages" });
-  await expect(pages.getByRole("button", { name: "Page 1", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(pages.getByRole("button", { name: "Previous" })).toBeDisabled();
-  await pages.getByRole("button", { name: "Page 2", exact: true }).click();
-  await expect(pages.getByRole("button", { name: "Page 2", exact: true })).toHaveAttribute("aria-current", "page");
-  await pages.getByRole("button", { name: "Next" }).click();
-  await expect(pages.getByRole("button", { name: "Page 3", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(list).toContainText("Showing 21–30");
-  await pages.getByRole("button", { name: "Page 1", exact: true }).click();
-  await expect(pages.getByRole("button", { name: "Page 1", exact: true })).toHaveAttribute("aria-current", "page");
-
-  // Typing swaps the list for the search results.
-  await admin.getByLabel(/Search by Member ID/).fill("5001");
-  await expect(admin.getByRole("region", { name: "Search results" })).toContainText("Aaru First");
-  await expect(list).toHaveCount(0);
-  await admin.getByLabel(/Search by Member ID/).fill("");
-  await expect(list).toBeVisible();
 
   // It counts for Admin in the reports, so the officers' totals still add up to the whole.
   await admin.goto("/admin");
@@ -1030,8 +1032,7 @@ test("pages arrive with their numbers already in them, not placeholders to fill 
   for (const [api, path] of [[officerApi, "/officer"], [adminApi, "/admin/mark"]] as const) {
     const desk = await html(api, path);
     expect(desk).not.toContain("animate-pulse");
-    if (api === adminApi) expect(desk).toContain("Not marked yet");
-    else expect(desk).not.toContain("Not marked yet");
+    expect(desk).not.toContain("Not marked yet");
     expect(desk).toContain('data-testid="stat-my-present"');
   }
 });
@@ -1322,9 +1323,9 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
 
   await admin.goto("/admin/report");
   const table = admin.getByRole("region", { name: "Report", exact: true });
-  await expect(table.getByRole("columnheader", { name: "Day 1" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Day 2" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Day 3" })).toHaveCount(0); // hasn't started
+  await expect(table.getByRole("columnheader", { name: "Gyansatr Day 1" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Gyansatr Day 2" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Gyansatr Day 3" })).toHaveCount(0); // hasn't started
 
   const search = admin.getByLabel("Search", { exact: true });
   const cells = async (name: string, count: number) => {
@@ -1364,7 +1365,7 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   await expect(admin.getByTestId("day-2-absent")).toHaveCount(0);
 
   // Filters: who was absent on Day 1.
-  await pick(admin, "Show", "Absent on Day 1");
+  await pick(admin, "Show", "Absent on Gyansatr Day 1");
   await expect(table).toContainText(nobody);
   await expect(table).not.toContainText("Suresh Shah");
   await expect(table.getByRole("heading")).toContainText(`(${members - (await presentOn(1))})`);
@@ -1388,7 +1389,7 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   const [download] = await Promise.all([admin.waitForEvent("download"), admin.getByRole("link", { name: "Download Excel" }).click()]);
   expect(download.suggestedFilename()).toBe("attendance_report_day-1-2.xlsx");
   const running = await read(readFileSync(await download.path()));
-  expect(running.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Day 1", "Day 2", "Days Present"]);
+  expect(running.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Gyansatr Day 1", "Gyansatr Day 2", "Days Present"]);
   expect(running.rows.get("Kiran Desai")!.Status).toBe("Quick Member");
   expect(running.rows.get("Suresh Shah")!.Status).toBe("Register");
   // The Totals sheet adds up the same way as the page.
@@ -1396,8 +1397,8 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   expect((running.wb.getWorksheet("Totals")!.getRow(1).values as unknown[]).slice(1)).toEqual(["Day", "Status", "Present", "Quick Member", "Total Present", "Absent"]);
   expect(totalsRow).toEqual(["Gyansatr Day 1", "Ended", (await presentOn(1)) - (await quickOn(1)), await quickOn(1), await presentOn(1), members - (await presentOn(1))]);
   expect(running.rows.size).toBe(members);
-  expect(running.rows.get(nobody)).toMatchObject({ "Day 1": "A", "Day 2": "-", "Days Present": 0 });
-  expect(running.rows.get("Suresh Shah")).toMatchObject({ "Day 1": "P", "Day 2": "P", "Days Present": 2 });
+  expect(running.rows.get(nobody)).toMatchObject({ "Gyansatr Day 1": "A", "Gyansatr Day 2": "-", "Days Present": 0 });
+  expect(running.rows.get("Suresh Shah")).toMatchObject({ "Gyansatr Day 1": "P", "Gyansatr Day 2": "P", "Days Present": 2 });
 
   // Ending Day 2 turns its blanks into A, and the toast points to the report.
   await admin.goto("/admin");
@@ -1416,9 +1417,9 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   const merged = await adminApi.get("/api/admin/day-report/export");
   expect(merged.headers()["content-disposition"]).toContain("attendance_report_all-days.xlsx");
   const all = await read(await merged.body());
-  expect(all.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Day 1", "Day 2", "Day 3", "Days Present"]);
-  expect(all.rows.get(nobody)).toMatchObject({ "Day 1": "A", "Day 2": "A", "Day 3": "P", "Days Present": 1 });
-  expect(all.rows.get("Suresh Shah")).toMatchObject({ "Day 1": "P", "Day 2": "P", "Day 3": "A", "Days Present": 2 });
+  expect(all.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Gyansatr Day 1", "Gyansatr Day 2", "Gyansatr Day 3", "Days Present"]);
+  expect(all.rows.get(nobody)).toMatchObject({ "Gyansatr Day 1": "A", "Gyansatr Day 2": "A", "Gyansatr Day 3": "P", "Days Present": 1 });
+  expect(all.rows.get("Suresh Shah")).toMatchObject({ "Gyansatr Day 1": "P", "Gyansatr Day 2": "P", "Gyansatr Day 3": "A", "Days Present": 2 });
   const totals = JSON.stringify(all.wb.getWorksheet("Totals")!.getSheetValues());
   expect(totals).toContain("Gyansatr Day 3");
 
@@ -1438,7 +1439,7 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
 test("Admin corrections: remove attendance with a reason, logged, and re-markable", async () => {
   // Removing a mark is on Admin's History, on the Mark Attendance page.
   await admin.goto("/admin/mark");
-  await admin.getByRole("navigation", { name: "Event days" }).getByRole("button", { name: /^Day 1/ }).click();
+  await admin.getByRole("navigation", { name: "Event days" }).getByRole("button", { name: /^Gyansatr Day 1/ }).click();
   await pick(admin, "Show", "Everyone");
   const history = admin.getByRole("region", { name: "Attendance history" });
   await history.getByRole("listitem").filter({ hasText: "Raju Pandya" }).getByRole("button", { name: "Remove Raju Pandya" }).click();
@@ -1547,12 +1548,12 @@ test("performance: 20,000 members upload and search quickly", async () => {
     i % 2 ? "Male" : "Female",
     ["Varachha", "Vapi", "Pune"][i % 3],
   ]);
-  const buffer = await xlsx(rows);
+  const buffer = await xlsx([...rows, ...(await alsoUploaded())]);
   const started = Date.now();
   const res = await upload(adminApi, buffer, "big.xlsx");
   const uploadMs = Date.now() - started;
   expect(res.status()).toBe(200);
-  expect(await res.json()).toMatchObject({ totalRows: 20000, imported: 20000, errorRows: 0 });
+  expect(await res.json()).toMatchObject({ imported: 20000, removed: 0, errorRows: 0 });
 
   const timings: Record<string, number> = {};
   for (const q of ["1001", "per sur", "700000", "person19999", "su", "a"]) {
@@ -1603,9 +1604,9 @@ test("screens fit a phone with no sideways scroll; screenshots for review", asyn
   await admin.screenshot({ path: `${dir}/admin-desktop.png`, fullPage: true });
   await admin.goto("/admin/members");
   await expect(admin.getByRole("region", { name: "Member list" }).getByRole("row").nth(1)).toBeVisible();
-  // With members in place, there's no upload, only Add Member.
-  await expect(admin.getByRole("button", { name: "Upload file" })).toHaveCount(0);
-  await expect(admin.getByRole("button", { name: "Upload Excel" })).toHaveCount(0);
+  // With members in place, the upload form is closed until Upload Excel opens it, next to Add Member.
+  await expect(admin.getByRole("button", { name: /^Upload/ }).filter({ hasNotText: "Upload Excel" })).toHaveCount(0);
+  await expect(admin.getByRole("button", { name: "Upload Excel" })).toBeVisible();
   await expect(admin.getByRole("button", { name: "Add Member" })).toBeVisible();
   await admin.screenshot({ path: `${dir}/members-desktop.png` });
 
@@ -1627,6 +1628,40 @@ test("screens fit a phone with no sideways scroll; screenshots for review", asyn
   await expect(adminPhone.getByRole("region", { name: "Member list" }).getByRole("listitem").first()).toBeVisible();
   expect(await overflow(adminPhone)).toBeLessThanOrEqual(0);
   await adminPhone.screenshot({ path: `${dir}/members-phone.png` });
+  await adminPhone.context().close();
+
+  // An officer's menu holds Install app and Log out.
+  await officer.getByRole("button", { name: "Open menu" }).click();
+  const officerMenu = officer.getByRole("dialog", { name: "Menu" });
+  await expect(officerMenu.getByRole("button", { name: "Log out" })).toBeVisible();
+  await expect(officerMenu).toContainText("Male members only");
+  await officer.screenshot({ path: `${dir}/officer-drawer.png`, animations: "disabled" });
+  await officer.keyboard.press("Escape");
+  await expect(officerMenu).toBeHidden();
+
+  // The narrowest phone: the header is one short row, and every page is in the drawer behind the menu button.
+  const tiny = await loginPage(browser, "admin", { width: 320, height: 720 });
+  await expect(tiny.getByRole("navigation", { name: "Admin" })).toBeHidden();
+  await expect(tiny.getByRole("button", { name: "Log out" })).toBeHidden();
+  expect((await tiny.locator("header").boundingBox())!.height).toBeLessThan(80);
+  const pages = [["Report", "/admin/report"], ["Members", "/admin/members"], ["Officers", "/admin/officers"], ["Mark Attendance", "/admin/mark"], ["Dashboard", "/admin"]];
+  for (const [label, path] of pages) {
+    await tiny.getByRole("button", { name: "Open menu" }).click();
+    const drawer = tiny.getByRole("dialog", { name: "Menu" });
+    await expect(drawer.getByRole("link", { name: label })).toBeVisible();
+    if (label === "Report") await tiny.screenshot({ path: `${dir}/drawer-320.png`, animations: "disabled" });
+    await drawer.getByRole("link", { name: label }).click();
+    await tiny.waitForURL((url) => url.pathname === path);
+    await expect(drawer).toBeHidden();
+    await expect(tiny.locator("h1").first()).toBeVisible();
+    expect(await overflow(tiny)).toBeLessThanOrEqual(0);
+    await tiny.screenshot({ path: `${dir}/${label.toLowerCase().replace(" ", "-")}-320.png`, fullPage: true });
+  }
+  // A tap beside the drawer closes it.
+  await tiny.getByRole("button", { name: "Open menu" }).click();
+  await tiny.mouse.click(310, 400);
+  await expect(tiny.getByRole("dialog", { name: "Menu" })).toBeHidden();
+  await tiny.context().close();
 });
 
 test("idle officer screen and login, for review", async ({ browser }) => {
@@ -1773,28 +1808,14 @@ test("the marking screen: side by side on large screens, one at a time with a bo
 
   await large.context().close();
 
-  // History stays in view while the long list on the left scrolls away. Only Admin has that list.
-  const wide = await loginPage(browser, "admin", { width: 1440, height: 900 });
-  await wide.goto("/admin/mark");
-  const adminLeft = (await wide.getByLabel(/Search by Member ID/).boundingBox())!;
-  const adminRight = wide.getByRole("region", { name: "Attendance history" });
-  await expect(wide.getByRole("region", { name: "Not marked yet" }).getByRole("listitem").first()).toBeVisible();
-  const before = (await adminRight.boundingBox())!;
-  await wide.mouse.move(adminLeft.x + 10, adminLeft.y + 300);
-  await wide.mouse.wheel(0, 600);
-  await expect.poll(() => wide.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-  const after = (await adminRight.boundingBox())!;
-  expect(after.y).toBeGreaterThan(0);
-  expect(after.y).toBeLessThanOrEqual(before.y);
-  await expect(adminRight).toBeInViewport();
-  await wide.context().close();
-
-  // The header keeps Log out level with the title at every width, however many links there are.
+  // The header is one row at every width: Log out (or, below 1024px, the menu button) level with the title.
   for (const width of [390, 640, 820, 1024, 1280, 1920]) {
     const page = await loginPage(browser, "admin", { width, height: 900 });
     const title = (await page.getByText("Gyansatr Attendance", { exact: true }).first().boundingBox())!;
-    const logOut = (await page.getByRole("button", { name: "Log out" }).boundingBox())!;
-    expect(Math.abs(title.y + title.height / 2 - (logOut.y + logOut.height / 2))).toBeLessThan(24);
+    const control = page.getByRole("button", { name: width < 1024 ? "Open menu" : "Log out" });
+    const box = (await control.boundingBox())!;
+    expect(Math.abs(title.y + title.height / 2 - (box.y + box.height / 2))).toBeLessThan(24);
+    await expect(page.getByRole("navigation", { name: "Admin" })).toBeVisible({ visible: width >= 1024 });
     if (width === 820) await page.screenshot({ path: "test-results/screens/admin-tablet.png" });
     await page.context().close();
   }
@@ -1975,6 +1996,122 @@ test("it installs as an app, and stores nothing personal on the device", async (
   await expect(page.getByLabel(/Search by Member ID/)).toBeVisible({ timeout: 10000 });
   await expect(page.getByRole("alert").filter({ hasText: "No internet" })).toHaveCount(0);
   await context.close();
+});
+
+test("Admin adds, renames and removes sessions beyond the first three", async () => {
+  await admin.goto("/admin");
+  await admin.getByRole("button", { name: "New Session" }).click();
+  await admin.getByLabel("Session name").fill("  Youth   Shibir ");
+  await admin.getByRole("dialog").getByRole("button", { name: "Add Session" }).click();
+  await expect(admin.getByRole("status")).toContainText("Added: Youth Shibir");
+  const card = admin.getByRole("article").filter({ hasText: "Youth Shibir" });
+  await expect(card).toContainText("Not Started");
+  const [created] = await db`select event_day, status from event_sessions where name = 'Youth Shibir'`;
+  expect(created).toMatchObject({ event_day: 4, status: "not_started" });
+
+  // Names are unique, ignoring case, and can't be blank.
+  expect((await adminApi.post("/api/admin/events", { data: { name: "youth shibir" } })).status()).toBe(409);
+  expect((await adminApi.post("/api/admin/events", { data: { name: "   " } })).status()).toBe(400);
+  expect((await officerApi.post("/api/admin/events", { data: { name: "Not allowed" } })).status()).toBe(403);
+
+  await card.getByRole("button", { name: "Rename Youth Shibir" }).click();
+  await admin.getByLabel("Session name").fill("Youth Shibir Evening");
+  await admin.getByRole("dialog").getByRole("button", { name: "Rename Session" }).click();
+  await expect(admin.getByRole("article").filter({ hasText: "Youth Shibir Evening" })).toBeVisible();
+
+  // It runs like any other day: start, mark, report, end.
+  const wasActive = (await db`select event_day from event_sessions where status = 'active'`)[0]?.event_day as number | undefined;
+  if (wasActive) expect((await setEvent(adminApi, wasActive, "end")).status()).toBe(200);
+  expect((await setEvent(adminApi, 4, "start")).status()).toBe(200);
+  expect((await mark(officerApi, await memberId("100001"), 4)).status()).toBe(200);
+  const present = await (await adminApi.get("/api/admin/day-report?show=P:4")).json();
+  expect(present.rows.map((r: { name: string }) => r.name)).toEqual(["Person1 Surname1"]);
+  expect(present.days.map((d: { name: string }) => d.name)).toContain("Youth Shibir Evening");
+  const dash = await (await adminApi.get("/api/admin/report?event=4")).json();
+  expect(dash.summary.total).toBe(1);
+  expect(dash.options.events).toContainEqual({ day: 4, name: "Youth Shibir Evening" });
+  expect((await adminApi.delete("/api/admin/events/4")).status()).toBe(409); // started, so it stays
+  expect((await setEvent(adminApi, 4, "end")).status()).toBe(200);
+  if (wasActive) expect((await setEvent(adminApi, wasActive, "restart")).status()).toBe(200);
+
+  // A session added by mistake can be removed before it starts.
+  expect((await adminApi.post("/api/admin/events", { data: { name: "Added by mistake" } })).status()).toBe(200);
+  await admin.reload();
+  await admin.getByRole("button", { name: "Remove Added by mistake" }).click();
+  await admin.getByRole("dialog").getByRole("button", { name: "Remove Session" }).click();
+  await expect(admin.getByRole("status")).toContainText("Removed: Added by mistake");
+  expect((await db`select count(*)::int as n from event_sessions where name = 'Added by mistake'`)[0].n).toBe(0);
+});
+
+test("a new upload replaces the earlier list, and Admin can clear attendance, both behind the Admin password", async () => {
+  // Someone from the current list, someone about to be left out, one added by hand, one from Quick Entry.
+  const extra = [[1, 9101, "Keep Me", "9000009101", "Male", "Vapi"], [2, 9102, "Drop Me", "9000009102", "Male", "Vapi"]];
+  expect((await upload(adminApi, await xlsx([...extra, ...(await alsoUploaded(extra))]))).status()).toBe(200);
+  const byHand = await adminApi.post("/api/admin/members", { data: { globalMemberId: "", name: "By Hand", mobile: "9000009103", gender: "Male", center: "Vapi" } });
+  expect(byHand.status()).toBe(200);
+  const quickCount = (await db`select count(*)::int as n from members where created_source = 'quick_entry'`)[0].n as number;
+  expect(quickCount).toBeGreaterThan(0);
+
+  if (!(await db`select 1 from event_sessions where status = 'active'`).length) expect((await setEvent(adminApi, 4, "restart")).status()).toBe(200);
+  const day = (await db`select event_day from event_sessions where status = 'active'`)[0].event_day as number;
+  for (const id of ["9101", "9102"]) expect((await mark(officerApi, await memberId(id), day)).status()).toBe(200);
+
+  // Without the password, or with a wrong one, nothing changes.
+  const file = await xlsx([[1, 9101, "Keep Me", "9000009101", "Male", "Vapi"], [2, 6002, "Mohan Letter", "9876560002", "X", "Vapi"]]);
+  expect((await (await upload(adminApi, file, "new.xlsx", "")).json()).code).toBe("password_required");
+  expect((await upload(adminApi, file, "new.xlsx", "wrong-password")).status()).toBe(403);
+  expect((await upload(officerApi, file)).status()).toBe(403);
+  expect(await memberId("9102")).toBeTruthy();
+
+  await admin.goto("/admin/members");
+  await admin.getByRole("button", { name: "Upload Excel" }).click();
+  await expect(admin.getByText("This file replaces the member list you uploaded before.")).toBeVisible();
+  await admin.getByLabel("Excel file").setInputFiles({ name: "new.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: file });
+  await admin.getByRole("button", { name: "Upload and replace list" }).click();
+  const dialog = admin.getByRole("dialog");
+  await dialog.getByLabel("Admin password").fill("wrong-password");
+  await dialog.getByRole("button", { name: "Replace List" }).click();
+  await expect(dialog).toContainText("That password isn't right");
+  await dialog.getByLabel("Admin password").fill(TEST_PASSWORD);
+  await dialog.getByRole("button", { name: "Replace List" }).click();
+  const summary = admin.getByTestId("import-summary");
+  await expect(summary).toContainText("weren't in this file and were removed");
+
+  const left = await db`select name, created_source, added_by_hand from members`;
+  const names = left.map((m) => m.name);
+  expect(names).toContain("Keep Me");
+  expect(names).not.toContain("Drop Me");
+  expect(names).toContain("Mohan Letter"); // on a row with a mistake, so still on the list
+  expect(names).toContain("By Hand");
+  expect(left.filter((m) => m.created_source === "quick_entry").length).toBe(quickCount);
+  // Someone still on the list keeps their attendance.
+  expect((await db`select count(*)::int as n from attendance where member_id = ${await memberId("9101")}`)[0].n).toBe(1);
+  const [log] = await db`select details from audit_log where action = 'members.excel_upload' order by id desc limit 1`;
+  expect(log.details.removed).toBeGreaterThan(0);
+
+  // Clearing one session's attendance leaves the others.
+  const otherDays = async () => (await db`select count(*)::int as n from attendance where event_day <> ${day}`)[0].n as number;
+  const before = await otherDays();
+  expect(before).toBeGreaterThan(0);
+  const dayName = (await db`select name from event_sessions where event_day = ${day}`)[0].name as string;
+  await admin.goto("/admin");
+  await admin.getByRole("button", { name: "Clear Attendance" }).click();
+  await pick(admin, "Clear attendance from", dayName);
+  await dialog.getByLabel("Admin password").fill("wrong-password");
+  await dialog.getByRole("button", { name: "Clear Attendance" }).click();
+  await expect(dialog).toContainText("That password isn't right");
+  await dialog.getByLabel("Admin password").fill(TEST_PASSWORD);
+  await dialog.getByRole("button", { name: "Clear Attendance" }).click();
+  await expect(admin.getByRole("status")).toContainText(`from ${dayName}`);
+  expect((await db`select count(*)::int as n from attendance where event_day = ${day}`)[0].n).toBe(0);
+  expect(await otherDays()).toBe(before);
+
+  // Then everything: officers can't, and the password is checked.
+  expect((await officerApi.post("/api/admin/attendance/clear", { data: { password: TEST_PASSWORD, day: "all" } })).status()).toBe(403);
+  expect((await adminApi.post("/api/admin/attendance/clear", { data: { password: "nope", day: "all" } })).status()).toBe(403);
+  expect((await adminApi.post("/api/admin/attendance/clear", { data: { password: TEST_PASSWORD, day: "all" } })).status()).toBe(200);
+  expect((await db`select count(*)::int as n from attendance`)[0].n).toBe(0);
+  expect((await db`select count(*)::int as n from audit_log where action = 'attendance.clear'`)[0].n).toBe(2);
 });
 
 test("no screen threw an error during this whole run", () => {

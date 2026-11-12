@@ -3,7 +3,7 @@ import ExcelJS from "exceljs";
 import { ApiError } from "./api";
 import type { SessionUser } from "./auth";
 import { writeAudit } from "./attendance";
-import { withTransaction } from "./db";
+import { getSql, withTransaction } from "./db";
 import { normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName, type Gender } from "./shared";
 
 /** Vercel rejects request bodies above 4.5 MB, so check first and give a useful message. */
@@ -32,9 +32,19 @@ export type ImportSummary = {
   totalRows: number;
   imported: number;
   updated: number;
+  /** Members from an earlier upload who aren't in this file, and their attendance, now removed. */
+  removed: number;
+  removedAttendance: number;
   errorRows: number;
   errors: ImportRowError[];
 };
+
+/** Is there an uploaded list for a new upload to replace? Then Admin must confirm with their password. */
+export async function hasUploadedMembers() {
+  const [row] = await getSql()`
+    select exists (select 1 from members where created_source = 'excel_import' and not added_by_hand) as yes`;
+  return row.yes as boolean;
+}
 
 type ValidRow = {
   row: number;
@@ -150,12 +160,22 @@ export async function parseWorkbook(buffer: ArrayBuffer) {
 
 export async function importMembers(admin: SessionUser, fileName: string, buffer: ArrayBuffer): Promise<ImportSummary> {
   const { valid, errors, totalRows } = await parseWorkbook(buffer);
+  // Replacing the list with a file where nothing could be read would empty it by mistake.
+  if (valid.length === 0) {
+    throw new ApiError(400, "no_valid_rows", "None of the rows in this file could be read, so the member list was left as it is. Correct the file and upload it again.");
+  }
   const withId = valid.filter((r) => r.id);
   const withoutId = valid.filter((r) => !r.id);
 
-  const { imported, updated } = await withTransaction(async (tx) => {
+  // Someone on a row with a mistake is still on the list, so a typo doesn't remove them.
+  const listedIds = errors.map((e) => normalizeMemberId(e.memberId)).filter((id): id is string => Boolean(id));
+  const listedNames = errors.map((e) => normalizeName(e.name).toLowerCase()).filter(Boolean);
+
+  const { imported, updated, removed, removedAttendance } = await withTransaction(async (tx) => {
     let imported = 0;
     let updated = 0;
+    // Everyone this file inserted or updated. Uploaded members not in here are no longer on the list.
+    const kept: number[] = [];
 
     if (withId.length > 0) {
       const rows = tx.json(withId as never);
@@ -189,8 +209,9 @@ export async function importMembers(admin: SessionUser, fileName: string, buffer
           -- A blank in a later file doesn't erase a number already on record.
           set name = excluded.name, mobile = coalesce(excluded.mobile, members.mobile), gender = excluded.gender,
               center = excluded.center, updated_at = now()
-        returning (xmax = 0) as inserted`;
+        returning id, (xmax = 0) as inserted`;
       for (const r of result) {
+        kept.push(r.id);
         if (r.inserted) imported += 1;
         else updated += 1;
       }
@@ -215,6 +236,7 @@ export async function importMembers(admin: SessionUser, fileName: string, buffer
         from pick p where m.id = p.id
         returning m.id`;
       updated += matched.count;
+      kept.push(...matched.map((r) => r.id as number));
 
       const inserted = await tx`
         insert into members (name, mobile, gender, center, created_source, created_by)
@@ -226,18 +248,37 @@ export async function importMembers(admin: SessionUser, fileName: string, buffer
         )
         returning id`;
       imported += inserted.count;
+      kept.push(...inserted.map((r) => r.id as number));
     }
+
+    // The file is now the list. Quick Members and people added with Add Member aren't part of any
+    // upload, so they stay. Removing a member removes their attendance with them.
+    const [gone] = await tx`
+      with gone as (
+        delete from members m
+        where m.created_source = 'excel_import' and not m.added_by_hand
+          and m.id not in (select value::int from jsonb_array_elements_text(${tx.json(kept as never)}))
+          and (m.global_member_id is null or m.global_member_id not in (select jsonb_array_elements_text(${tx.json(listedIds as never)})))
+          and lower(m.name) not in (select jsonb_array_elements_text(${tx.json(listedNames as never)}))
+        returning m.id
+      )
+      select (select count(*)::int from gone) as members,
+             (select count(*)::int from attendance a where a.member_id in (select id from gone) and a.status = 'present') as attendance`;
+    const removed = gone.members as number;
+    const removedAttendance = gone.attendance as number;
 
     await writeAudit(tx, admin, "members.excel_upload", null, {
       file_name: fileName,
       total_rows: totalRows,
       imported,
       updated,
+      removed,
+      removed_attendance: removedAttendance,
       error_rows: errors.length,
     });
 
-    return { imported, updated };
+    return { imported, updated, removed, removedAttendance };
   });
 
-  return { fileName, totalRows, imported, updated, errorRows: errors.length, errors };
+  return { fileName, totalRows, imported, updated, removed, removedAttendance, errorRows: errors.length, errors };
 }

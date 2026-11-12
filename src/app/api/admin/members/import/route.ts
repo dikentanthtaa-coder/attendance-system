@@ -1,5 +1,6 @@
 import { adminRoute, ApiError } from "@/lib/api";
-import { importMembers, MAX_UPLOAD_BYTES } from "@/lib/excel-import";
+import { hasUploadedMembers, importMembers, MAX_UPLOAD_BYTES } from "@/lib/excel-import";
+import { confirmOwnPassword } from "@/lib/confirm-password";
 
 export const POST = adminRoute(async (admin, req) => {
   const form = await req.formData().catch(() => null);
@@ -9,5 +10,7 @@ export const POST = adminRoute(async (admin, req) => {
   if (!file.name.toLowerCase().endsWith(".xlsx")) {
     throw new ApiError(400, "invalid_file", "Please upload an .xlsx Excel file (older .xls files must be re-saved as .xlsx).");
   }
+  // The upload replaces the list already there, which can remove members and their attendance.
+  if (await hasUploadedMembers()) await confirmOwnPassword(admin.id, form?.get("password"));
   return importMembers(admin, file.name, await file.arrayBuffer());
 });

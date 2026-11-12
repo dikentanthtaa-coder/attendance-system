@@ -44,6 +44,7 @@ export function PersonRow({
   actions,
   nameBadge,
   hideAvatarOnPhone,
+  stackActions,
 }: {
   name: string;
   gender?: Gender;
@@ -53,9 +54,11 @@ export function PersonRow({
   /** Sits beside the name, so a row stays compact. */
   nameBadge?: ReactNode;
   hideAvatarOnPhone?: boolean;
+  /** Phones: the actions go on their own line under the details, so a long name isn't squeezed. */
+  stackActions?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5 sm:py-3">
+    <div className={`flex items-center gap-3 px-4 py-2.5 sm:py-3 ${stackActions ? "max-sm:flex-wrap" : ""}`}>
       <Avatar name={name} gender={gender} className={`self-start ${hideAvatarOnPhone ? "hidden sm:flex" : ""}`} />
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm leading-snug font-semibold break-words sm:text-base">
@@ -65,7 +68,7 @@ export function PersonRow({
         {meta}
         {footer && <div className="mt-1.5 flex flex-wrap items-center gap-1.5">{footer}</div>}
       </div>
-      {actions && <div className="flex shrink-0 items-center gap-1">{actions}</div>}
+      {actions && <div className={`flex shrink-0 items-center gap-1 ${stackActions ? "max-sm:basis-full max-sm:pl-12" : ""}`}>{actions}</div>}
     </div>
   );
 }

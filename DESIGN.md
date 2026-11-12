@@ -55,7 +55,10 @@ Mukta Vaani throughout: it covers Latin and Gujarati, and has true tabular figur
 - It installs as an app. The service worker stores only code, icons and the offline page, never pages or replies with member details.
 - Touch targets are at least 44px on phones. Below `lg`, `DataTable` shows a list instead of a table, and every field is kept.
 - One main action per view: Mark Present is green, and everything else is quieter. The exception is Quick Entry on the marking screen: full width and filled, so officers find it at once.
-- Officers find people by search only. The "Not marked yet" list shows on Admin's marking screen, not on an officer's.
+- Everyone finds people by search only, Admin included. There's no "Not marked yet" list.
+- Below 1024px the header is one short row: a menu button, the app name, and the role and current page under it. Every page, Install app and Log out are in a drawer that slides in from the left. From 1024px the links sit in the header.
+- On phones, page-title buttons share one full-width row, an alert's button drops under its message at full width, and a list row's actions can drop under the details (`stackActions`), so nothing is squeezed into a narrow column.
+- Rare actions that can't be undone (Clear Attendance, replacing the member list) ask for the Admin login password, and Clear Attendance sits at the foot of the Dashboard, away from everyday buttons.
 - Totals show the person's own figure next to the whole: "My present" beside "Total present" for an officer, each officer beside "All officers" for Admin. Long lists show page numbers.
 - Confirmation appears beside the search box and toasts at the top of the screen, because a phone keyboard can hide the bottom.
 - Dropdowns are always `Select` or `CenterSelect`, never the browser's own `<select>` or `<datalist>`, which can't be styled and differ on every device. A filter in use is tinted, so it's clear why the numbers are narrowed.

@@ -2,6 +2,7 @@ import { listEvents } from "@/lib/attendance";
 import { requirePageRole } from "@/lib/auth";
 import { getReport, parseFilters } from "@/lib/reports";
 import type { EventSession } from "@/lib/shared";
+import { ClearAttendance } from "./clear-attendance";
 import { Dashboard } from "./dashboard";
 import { EventControls } from "./event-controls";
 
@@ -17,6 +18,7 @@ export default async function AdminPage() {
     <>
       <EventControls initialEvents={events} />
       <Dashboard initial={JSON.parse(JSON.stringify(report))} generatedAt={new Date().toISOString()} />
+      <ClearAttendance initialEvents={events} />
     </>
   );
 }

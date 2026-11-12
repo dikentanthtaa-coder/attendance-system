@@ -40,7 +40,8 @@ export function OfficersAdmin({ initial }: { initial: { officers: Officer[] } })
                 name={o.display_name}
                 gender={o.gender_scope}
                 nameBadge={<GenderBadge gender={o.gender_scope} />}
-                meta={<p className="mt-0.5 text-sm text-muted">Username: {o.username}</p>}
+                meta={<p className="mt-0.5 text-sm text-muted">Username: <span className="font-medium text-ink">{o.username}</span></p>}
+                stackActions
                 actions={<Button variant="ghost" size="sm" icon={KeyRound} onClick={() => setResetting(o)}>Reset password</Button>}
               />
             </li>
