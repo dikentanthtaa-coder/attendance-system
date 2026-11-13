@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, CircleCheck, Phone, Search, UserRound } from "lucide-react";
+import { ArrowLeft, CircleCheck, Hash, Phone, Search, UserRound } from "lucide-react";
 import { DigitsField } from "@/components/digits-field";
 import { CenterSelect, centerName, centerValue, EMPTY_CENTER, type CenterValue } from "@/components/center-select";
 import { Alert, Button, Card, CardHeader, Field, Select, TextInput, type SelectOption } from "@/components/ui";
@@ -12,11 +12,13 @@ export type QuickEntryPrefill = { name?: string; mobile?: string; globalMemberId
 
 type Duplicates = {
   exact: { name: string | null } | null;
+  /** Someone already has this Member ID. `name` is empty when they're outside this officer's gender. */
+  memberIdTaken: { name: string | null } | null;
   mobileMatches: string[];
   nameMatches: { name: string; memberId: string | null; mobile: string | null; center: string }[];
 };
 
-const NOTHING_FOUND: Duplicates = { exact: null, mobileMatches: [], nameMatches: [] };
+const NOTHING_FOUND: Duplicates = { exact: null, memberIdTaken: null, mobileMatches: [], nameMatches: [] };
 
 const GENDER_OPTIONS: SelectOption[] = [
   { value: "Male", label: "Male" },
@@ -56,7 +58,9 @@ export function QuickEntryPanel({
 
   const normalized = normalizeMobile(mobile);
   const cleanName = normalizeName(name);
-  const checkKey = `${cleanName.toLowerCase()}|${normalized ?? ""}`;
+  // A Member ID is checked once all its digits are in, like the mobile number.
+  const completeId = globalMemberId.length === MEMBER_ID_DIGITS ? globalMemberId : "";
+  const checkKey = `${cleanName.toLowerCase()}|${normalized ?? ""}|${completeId}`;
   const mobileRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const idRef = useRef<HTMLInputElement>(null);
@@ -70,10 +74,10 @@ export function QuickEntryPanel({
   const needsConfirmation = asksToConfirm && confirmedKey !== checkKey;
 
   useEffect(() => {
-    if (!cleanName && !normalized) return;
+    if (!cleanName && !normalized && !completeId) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      api<Duplicates>(`/api/officer/check-duplicate?name=${encodeURIComponent(cleanName)}&mobile=${normalized ?? ""}`, { signal: controller.signal })
+      api<Duplicates>(`/api/officer/check-duplicate?name=${encodeURIComponent(cleanName)}&mobile=${normalized ?? ""}&memberId=${completeId}`, { signal: controller.signal })
         .then((result) => setCheck({ key: checkKey, found: result }))
         .catch(() => {}); // saving repeats these checks, so nothing is lost if this request fails
     }, 250);
@@ -81,7 +85,7 @@ export function QuickEntryPanel({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [cleanName, normalized, checkKey]);
+  }, [cleanName, normalized, completeId, checkKey]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -96,7 +100,7 @@ export function QuickEntryPanel({
       idRef.current?.focus();
       return setError(`Member ID must be ${MEMBER_ID_DIGITS} digits. You entered ${globalMemberId.length}.`);
     }
-    if (found.exact || needsConfirmation) return;
+    if (found.exact || found.memberIdTaken || needsConfirmation) return;
 
     setBusy(true);
     try {
@@ -121,6 +125,12 @@ export function QuickEntryPanel({
       }
       if (err instanceof ClientApiError && err.code === "duplicate_name") {
         setCheck({ key: checkKey, found: { ...NOTHING_FOUND, nameMatches: err.data.nameMatches as Duplicates["nameMatches"] } });
+        return;
+      }
+      // Taken on another device after the check above.
+      if (err instanceof ClientApiError && err.code === "member_id_taken") {
+        setCheck({ key: checkKey, found: { ...NOTHING_FOUND, memberIdTaken: { name: (err.data?.name as string | null) ?? null } } });
+        idRef.current?.focus();
         return;
       }
       if (err instanceof ClientApiError && err.code === "member_exists") {
@@ -228,6 +238,7 @@ export function QuickEntryPanel({
           label="Global Member ID"
           digits={MEMBER_ID_DIGITS}
           optional
+          icon={Hash}
           inputRef={idRef}
           value={globalMemberId}
           clean={memberIdInputValue}
@@ -237,10 +248,27 @@ export function QuickEntryPanel({
           }}
         />
 
+        {found.memberIdTaken && (
+          <Alert
+            tone="danger"
+            title={found.memberIdTaken.name ? `Member ID ${completeId} already belongs to ${found.memberIdTaken.name}.` : `Member ID ${completeId} is already in use.`}
+          >
+            <p>
+              One Member ID is for one person only.{" "}
+              {found.memberIdTaken.name ? "If this is them, find them and mark them present. If not, check the number or leave it empty." : "Check the number, or leave it empty."}
+            </p>
+            {found.memberIdTaken.name && (
+              <div className="mt-3">
+                <Button icon={Search} onClick={() => onFindExisting(completeId)}>Find this member</Button>
+              </div>
+            )}
+          </Alert>
+        )}
+
         {error && <Alert tone="danger" title={error} />}
 
         <div className="flex flex-col gap-2 sm:flex-row-reverse sm:justify-start">
-          <Button type="submit" variant="success" size="lg" icon={CircleCheck} loading={busy} disabled={needsConfirmation || Boolean(found.exact)} className="sm:flex-1">
+          <Button type="submit" variant="success" size="lg" icon={CircleCheck} loading={busy} disabled={needsConfirmation || Boolean(found.exact) || Boolean(found.memberIdTaken)} className="sm:flex-1">
             {busy ? "Saving…" : "Save & Mark Present"}
           </Button>
           <Button variant="secondary" size="lg" icon={ArrowLeft} onClick={onCancel}>Back to search</Button>
