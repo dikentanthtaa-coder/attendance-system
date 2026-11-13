@@ -1960,6 +1960,14 @@ test("the Install app button catches an early offer, prompts once, and explains 
   await page.goto("/login");
   const button = page.getByRole("button", { name: "Install app" });
   await expect(button).toBeVisible();
+  // It says what it does on the narrowest phone too, not just a download arrow, and fits the screen.
+  await page.setViewportSize({ width: 320, height: 791 });
+  await expect(button).toHaveText("Install app");
+  const installBox = (await button.boundingBox())!;
+  expect(installBox.x).toBeGreaterThanOrEqual(0);
+  expect(installBox.x + installBox.width).toBeLessThanOrEqual(320);
+  await page.screenshot({ path: "test-results/screens/login-install-320.png" });
+  await page.setViewportSize({ width: 1280, height: 900 });
   // Two quick taps open one prompt, and the spent offer isn't kept.
   await button.dblclick();
   await expect.poll(() => page.evaluate(() => (window as unknown as { prompts: number }).prompts)).toBe(1);

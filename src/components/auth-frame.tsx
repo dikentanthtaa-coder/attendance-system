@@ -31,7 +31,7 @@ export function AuthFrame({ children }: { children: ReactNode }) {
       <div className="flex flex-1 items-start justify-center px-4 pb-10 lg:items-center lg:p-10">
         <div className="-mt-12 flex w-full max-w-md flex-col items-center gap-2 lg:mt-0">
           <Card className="w-full p-6">{children}</Card>
-          <InstallButton />
+          <InstallButton variant="secondary" className="w-full" />
         </div>
       </div>
     </main>

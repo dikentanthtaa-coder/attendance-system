@@ -222,7 +222,7 @@ function MenuDrawer({
           )}
 
           <div className="mt-auto flex flex-col gap-2 border-t border-rule p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
-            <InstallButton variant="secondary" className="w-full" alwaysLabelled />
+            <InstallButton variant="secondary" className="w-full" />
             <Button variant="danger-outline" icon={LogOut} className="w-full" onClick={onLogOut}>Log out</Button>
           </div>
         </div>
