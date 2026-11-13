@@ -1,6 +1,6 @@
-# Gyansatr Attendance
+# Gyansatra Attendance
 
-Attendance management for the three-day Gyansatr event: Admin controls the event days, and the Male and Female Officers search for members and mark them present.
+Attendance management for the three-day Gyansatra event: Admin controls the event days, and the Male and Female Officers search for members and mark them present.
 
 Built with Next.js, Postgres on Supabase, and Vercel hosting.
 

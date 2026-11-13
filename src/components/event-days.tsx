@@ -20,13 +20,18 @@ export function EventDayTabs({ events, selectedDay, onSelect }: { events: EventS
     <nav aria-label="Event days" className="grid auto-cols-[minmax(5.5rem,1fr)] grid-flow-col gap-2 overflow-x-auto pb-1">
       {events.map((event) => {
         const selected = event.event_day === selectedDay;
+        // The live day is light green, as on Admin's Dashboard, so it's clear at a glance which one is running.
+        const look =
+          event.status === "active"
+            ? `bg-ok-soft ${selected ? "border-ok" : "border-ok/40 hover:border-ok"}`
+            : `bg-white ${selected ? "border-brand" : "border-transparent hover:border-control"}`;
         return (
           <button
             key={event.event_day}
             type="button"
             aria-pressed={selected}
             onClick={() => onSelect(event.event_day)}
-            className={`flex min-h-14 min-w-0 flex-col items-start justify-center gap-1 rounded-control border-2 bg-white px-2 py-1.5 text-left shadow-xs transition-colors duration-150 sm:px-2.5 ${selected ? "border-brand" : "border-transparent hover:border-control"}`}
+            className={`flex min-h-14 min-w-0 flex-col items-start justify-center gap-1 rounded-control border-2 px-2 py-1.5 text-left shadow-xs transition-colors duration-150 sm:px-2.5 ${look}`}
           >
             <span className="line-clamp-2 text-sm leading-tight font-bold">{event.name}</span>
             <StatusBadge status={event.status} compact />

@@ -908,7 +908,7 @@ test("totals and history: each officer sees their own and the whole, and a new m
   await expect(history).toContainText("Suresh Shah");
   await expect(history).not.toContainText("Others Olga");
   await expect(history).not.toContainText("Radha");
-  await expect(officer.getByRole("combobox", { name: "Show" })).toHaveCount(0);
+  await expect(officer.getByRole("combobox", { name: "Marked by" })).toHaveCount(0);
   await expect(history.getByRole("button", { name: /^Remove/ })).toHaveCount(0); // only Admin can remove a mark
   const allParam = await (await officerApi.get("/api/officer/history?day=1&scope=all")).json();
   expect(allParam.records.every((r: { gender: string }) => r.gender === "Male")).toBe(true);
@@ -983,7 +983,7 @@ test("Mark Present is offered without searching, with page numbers, for Admin on
   await admin.goto("/admin");
   await admin.getByRole("main").getByRole("link", { name: "Mark Attendance" }).click();
   await admin.waitForURL("**/admin/mark");
-  await expect(admin.getByRole("heading", { name: /^Marking Gyansatr Day/ })).toHaveCount(1);
+  await expect(admin.getByRole("heading", { name: /^Marking Gyansatra Day/ })).toHaveCount(1);
   await expect(admin.getByRole("button", { name: /Absent/ })).toHaveCount(0);
   await expect(admin.getByRole("region", { name: "Not marked yet" })).toHaveCount(0);
   // The area names still arrive, for narrowing a search.
@@ -1120,7 +1120,7 @@ test("ending the event stops marking at once, and the officer's screen locks by 
   await expect(officer.getByLabel(/Search by Member ID/)).toBeVisible();
 
   await admin.goto("/admin");
-  const card = admin.getByRole("article").filter({ hasText: "Gyansatr Day 1" });
+  const card = admin.getByRole("article").filter({ hasText: "Gyansatra Day 1" });
   await card.getByRole("button", { name: "End Event" }).click();
   await admin.getByRole("dialog").getByRole("button", { name: "End Event" }).click();
   await expect(card).toContainText("Ended");
@@ -1141,7 +1141,7 @@ test("ending the event stops marking at once, and the officer's screen locks by 
 test("each day's attendance is separate, and the officer follows the newly active day", async () => {
   expect((await setEvent(adminApi, 2, "start")).status()).toBe(200);
   await expect(officer.getByLabel(/Search by Member ID/)).toBeVisible({ timeout: 8000 });
-  await expect(officer.getByRole("heading", { name: "Marking Gyansatr Day 2" })).toBeVisible();
+  await expect(officer.getByRole("heading", { name: "Marking Gyansatra Day 2" })).toBeVisible();
 
   const id = await memberId("3001");
   expect((await (await mark(officerApi, id, 2)).json()).status).toBe("marked");
@@ -1164,7 +1164,7 @@ test("dashboard: totals respond to filters and match the database", async () => 
   await expect(admin.getByTestId("stat-female")).toHaveText(String(await count("and m.gender='Female'")));
   await expect(admin.getByTestId("stat-total")).toHaveText(String(await count("")));
 
-  await pick(admin, "Event", "Gyansatr Day 2");
+  await pick(admin, "Event", "Gyansatra Day 2");
   await expect(admin.getByTestId("stat-total")).toHaveText(String(await count("and a.event_day=2")));
   await pick(admin, "Event", "All Days");
 
@@ -1215,7 +1215,7 @@ test("dashboard: totals respond to filters and match the database", async () => 
   await expect(chart.getByRole("tooltip")).toContainText("Male · Day 1");
   await expect(chart.getByRole("img", { name: /% male \(\d+\), \d+% female/ })).toBeVisible();
   await chart.getByRole("button", { name: "Show table" }).click();
-  await expect(chart.getByRole("row").filter({ hasText: "Gyansatr Day 1" })).toContainText(String(day1[0].male + day1[0].female));
+  await expect(chart.getByRole("row").filter({ hasText: "Gyansatra Day 1" })).toContainText(String(day1[0].male + day1[0].female));
   await chart.getByRole("button", { name: "Show chart" }).click();
   await pick(admin, "Gender", "Male");
   await expect(chart.getByRole("button", { name: / female$/ })).toHaveCount(0);
@@ -1324,9 +1324,9 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
 
   await admin.goto("/admin/report");
   const table = admin.getByRole("region", { name: "Report", exact: true });
-  await expect(table.getByRole("columnheader", { name: "Gyansatr Day 1" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Gyansatr Day 2" })).toBeVisible();
-  await expect(table.getByRole("columnheader", { name: "Gyansatr Day 3" })).toHaveCount(0); // hasn't started
+  await expect(table.getByRole("columnheader", { name: "Gyansatra Day 1" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Gyansatra Day 2" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Gyansatra Day 3" })).toHaveCount(0); // hasn't started
 
   const search = admin.getByLabel("Search", { exact: true });
   const cells = async (name: string, count: number) => {
@@ -1358,15 +1358,15 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   await expect(admin.getByTestId("day-1-total")).toHaveText(String(await presentOn(1)));
   await expect(admin.getByTestId("day-1-absent")).toHaveText(String(members - (await presentOn(1))));
   // The card reads as a sum, in this order, with Absent after it.
-  const day1Card = (await admin.getByLabel("Gyansatr Day 1 totals").innerText()).replace(/\s+/g, " ");
+  const day1Card = (await admin.getByLabel("Gyansatra Day 1 totals").innerText()).replace(/\s+/g, " ");
   expect(day1Card).toMatch(/\d+ Present \+ \d+ Quick Member = \d+ Total Present \d+ Absent/);
-  expect((await admin.getByLabel("Gyansatr Day 2 totals").innerText()).replace(/\s+/g, " ")).toMatch(/Total Present \d+ Not marked yet/);
+  expect((await admin.getByLabel("Gyansatra Day 2 totals").innerText()).replace(/\s+/g, " ")).toMatch(/Total Present \d+ Not marked yet/);
   await expect(admin.getByTestId("day-2-total")).toHaveText(String(await presentOn(2)));
   await expect(admin.getByTestId("day-2-not-marked")).toHaveText(String(members - (await presentOn(2))));
   await expect(admin.getByTestId("day-2-absent")).toHaveCount(0);
 
   // Filters: who was absent on Day 1.
-  await pick(admin, "Show", "Absent on Gyansatr Day 1");
+  await pick(admin, "Show", "Absent on Gyansatra Day 1");
   await expect(table).toContainText(nobody);
   await expect(table).not.toContainText("Suresh Shah");
   await expect(table.getByRole("heading")).toContainText(`(${members - (await presentOn(1))})`);
@@ -1390,20 +1390,20 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   const [download] = await Promise.all([admin.waitForEvent("download"), admin.getByRole("link", { name: "Download Excel" }).click()]);
   expect(download.suggestedFilename()).toBe("attendance_report_day-1-2.xlsx");
   const running = await read(readFileSync(await download.path()));
-  expect(running.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Gyansatr Day 1", "Gyansatr Day 2", "Days Present"]);
+  expect(running.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Gyansatra Day 1", "Gyansatra Day 2", "Days Present"]);
   expect(running.rows.get("Kiran Desai")!.Status).toBe("Quick Member");
   expect(running.rows.get("Suresh Shah")!.Status).toBe("Register");
   // The Totals sheet adds up the same way as the page.
   const totalsRow = (running.wb.getWorksheet("Totals")!.getRow(2).values as unknown[]).slice(1);
   expect((running.wb.getWorksheet("Totals")!.getRow(1).values as unknown[]).slice(1)).toEqual(["Day", "Status", "Present", "Quick Member", "Total Present", "Absent"]);
-  expect(totalsRow).toEqual(["Gyansatr Day 1", "Ended", (await presentOn(1)) - (await quickOn(1)), await quickOn(1), await presentOn(1), members - (await presentOn(1))]);
+  expect(totalsRow).toEqual(["Gyansatra Day 1", "Ended", (await presentOn(1)) - (await quickOn(1)), await quickOn(1), await presentOn(1), members - (await presentOn(1))]);
   expect(running.rows.size).toBe(members);
-  expect(running.rows.get(nobody)).toMatchObject({ "Gyansatr Day 1": "A", "Gyansatr Day 2": "-", "Days Present": 0 });
-  expect(running.rows.get("Suresh Shah")).toMatchObject({ "Gyansatr Day 1": "P", "Gyansatr Day 2": "P", "Days Present": 2 });
+  expect(running.rows.get(nobody)).toMatchObject({ "Gyansatra Day 1": "A", "Gyansatra Day 2": "-", "Days Present": 0 });
+  expect(running.rows.get("Suresh Shah")).toMatchObject({ "Gyansatra Day 1": "P", "Gyansatra Day 2": "P", "Days Present": 2 });
 
   // Ending Day 2 turns its blanks into A, and the toast points to the report.
   await admin.goto("/admin");
-  const day2 = admin.getByRole("article").filter({ hasText: "Gyansatr Day 2" });
+  const day2 = admin.getByRole("article").filter({ hasText: "Gyansatra Day 2" });
   await day2.getByRole("button", { name: "End Event" }).click();
   await admin.getByRole("dialog").getByRole("button", { name: "End Event" }).click();
   await expect(admin.getByRole("status")).toContainText("ready in Report");
@@ -1418,11 +1418,11 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   const merged = await adminApi.get("/api/admin/day-report/export");
   expect(merged.headers()["content-disposition"]).toContain("attendance_report_all-days.xlsx");
   const all = await read(await merged.body());
-  expect(all.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Gyansatr Day 1", "Gyansatr Day 2", "Gyansatr Day 3", "Days Present"]);
-  expect(all.rows.get(nobody)).toMatchObject({ "Gyansatr Day 1": "A", "Gyansatr Day 2": "A", "Gyansatr Day 3": "P", "Days Present": 1 });
-  expect(all.rows.get("Suresh Shah")).toMatchObject({ "Gyansatr Day 1": "P", "Gyansatr Day 2": "P", "Gyansatr Day 3": "A", "Days Present": 2 });
+  expect(all.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Gyansatra Day 1", "Gyansatra Day 2", "Gyansatra Day 3", "Days Present"]);
+  expect(all.rows.get(nobody)).toMatchObject({ "Gyansatra Day 1": "A", "Gyansatra Day 2": "A", "Gyansatra Day 3": "P", "Days Present": 1 });
+  expect(all.rows.get("Suresh Shah")).toMatchObject({ "Gyansatra Day 1": "P", "Gyansatra Day 2": "P", "Gyansatra Day 3": "A", "Days Present": 2 });
   const totals = JSON.stringify(all.wb.getWorksheet("Totals")!.getSheetValues());
-  expect(totals).toContain("Gyansatr Day 3");
+  expect(totals).toContain("Gyansatra Day 3");
 
   // It follows the filters, and is Admin's only.
   const males = await read(await (await adminApi.get("/api/admin/day-report/export?gender=Male")).body());
@@ -1440,9 +1440,43 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
 test("Admin corrections: remove attendance with a reason, logged, and re-markable", async () => {
   // Removing a mark is on Admin's History, on the Mark Attendance page.
   await admin.goto("/admin/mark");
-  await admin.getByRole("navigation", { name: "Event days" }).getByRole("button", { name: /^Gyansatr Day 1/ }).click();
-  await pick(admin, "Show", "Everyone");
+  await admin.getByRole("navigation", { name: "Event days" }).getByRole("button", { name: /^Gyansatra Day 1/ }).click();
   const history = admin.getByRole("region", { name: "Attendance history" });
+  await expect(admin.getByLabel("Marked by", { exact: true })).toContainText("Everyone"); // officers' marks first, as they're what Admin corrects
+
+  // Found by search rather than by paging, and narrowed by gender.
+  await pick(admin, "Marked by", "Me");
+  await history.getByLabel(/^Search/).fill("raju pan");
+  await expect(history).toContainText("Nobody here matches “raju pan”");
+  await history.getByRole("button", { name: "Show Everyone" }).click();
+  await expect(history.getByRole("listitem")).toHaveCount(1);
+  await expect(history.getByRole("listitem")).toContainText("Raju Pandya");
+  await pick(admin, "Gender", "Female");
+  await expect(history.getByRole("listitem")).toHaveCount(0);
+  await pick(admin, "Gender", "Male");
+  await expect(history.getByRole("listitem")).toHaveCount(1);
+  await history.getByLabel(/^Search/).fill("2052");
+  await expect(history.getByRole("listitem")).toContainText("Raju Pandya");
+  await admin.screenshot({ path: "test-results/screens/admin-history-search.png", fullPage: true });
+  // On the smallest phone, both dropdowns sit side by side with their words whole.
+  await admin.setViewportSize({ width: 320, height: 800 });
+  await showView(admin, "History");
+  await pick(admin, "Marked by", "Me");
+  await expect(history).toContainText("Nobody here matches “2052”");
+  expect(await admin.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  for (const label of ["Marked by", "Gender"]) {
+    const shown = admin.getByLabel(label, { exact: true }).locator("span").first();
+    expect(await shown.evaluate((e) => e.scrollWidth <= e.clientWidth), `${label} is cut off`).toBe(true);
+  }
+  await admin.screenshot({ path: "test-results/screens/admin-history-320.png", fullPage: true });
+  await pick(admin, "Marked by", "Everyone");
+  await admin.setViewportSize({ width: 1280, height: 900 });
+
+  const total = async (api: APIRequestContext, extra = "") => (await (await api.get(`/api/officer/history?day=1&scope=all${extra}`)).json()).total as number;
+  expect((await total(adminApi, "&gender=Male")) + (await total(adminApi, "&gender=Female"))).toBe(await total(adminApi));
+  expect(await total(officerApi, "&gender=Female")).toBe(await total(officerApi)); // an officer stays within their own gender
+  expect(await total(adminApi, `&q=${encodeURIComponent("%_\\(")}`)).toBe(0);
+
   await history.getByRole("listitem").filter({ hasText: "Raju Pandya" }).getByRole("button", { name: "Remove Raju Pandya" }).click();
   const dialog = admin.getByRole("dialog");
   await expect(dialog.getByRole("button", { name: "Remove Attendance" })).toBeDisabled();
@@ -1818,8 +1852,8 @@ test("a request cancelled while its reply is arriving is reported as cancelled, 
 
   await admin.goto("/admin/mark");
   await admin.route("**/api/officer/history?**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Bad gateway</h1>" }));
-  await admin.getByRole("combobox", { name: "Show" }).click();
-  await admin.getByRole("option", { name: "Everyone" }).click();
+  await admin.getByRole("combobox", { name: "Marked by" }).click();
+  await admin.getByRole("option", { name: "Me", exact: true }).click();
   await expect(admin.getByRole("region", { name: "Attendance history" }).getByRole("button", { name: "Retry" })).toBeVisible();
   await admin.unroute("**/api/officer/history?**");
 });
@@ -1868,7 +1902,7 @@ test("the marking screen: side by side on large screens, one at a time with a bo
   // The header is one row at every width: Log out (or, below 1024px, the menu button) level with the title.
   for (const width of [390, 640, 820, 1024, 1280, 1920]) {
     const page = await loginPage(browser, "admin", { width, height: 900 });
-    const title = (await page.getByText("Gyansatr Attendance", { exact: true }).first().boundingBox())!;
+    const title = (await page.getByText("Gyansatra Attendance", { exact: true }).first().boundingBox())!;
     const control = page.getByRole("button", { name: width < 1024 ? "Open menu" : "Log out" });
     const box = (await control.boundingBox())!;
     expect(Math.abs(title.y + title.height / 2 - (box.y + box.height / 2))).toBeLessThan(24);
@@ -1897,9 +1931,9 @@ test("the marking screen: side by side on large screens, one at a time with a bo
   const dayTabs = small.getByRole("navigation", { name: "Event days" }).getByRole("button");
   const heights = await dayTabs.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
   expect(new Set(heights).size).toBe(1);
-  const heading = small.getByRole("heading", { name: /^Marking Gyansatr Day/ });
+  const heading = small.getByRole("heading", { name: /^Marking Gyansatra Day/ });
   expect((await heading.boundingBox())!.height).toBeLessThan(36);
-  expect((await small.getByText("Gyansatr Attendance").first().evaluate((e) => e.scrollWidth <= e.clientWidth))).toBe(true);
+  expect((await small.getByText("Gyansatra Attendance").first().evaluate((e) => e.scrollWidth <= e.clientWidth))).toBe(true);
   await small.screenshot({ path: "test-results/screens/officer-320.png" });
 
   // Long names stay compact: at most two lines, with the details on one, and the button on the same row.
@@ -2004,7 +2038,7 @@ test("it installs as an app, and stores nothing personal on the device", async (
   const res = await request.get("/manifest.webmanifest");
   expect(res.status()).toBe(200);
   const manifest = await res.json();
-  expect(manifest).toMatchObject({ name: "Gyansatr Attendance", short_name: "Gyansatr", display: "standalone", start_url: "/" });
+  expect(manifest).toMatchObject({ name: "Gyansatra Attendance", short_name: "Gyansatra", display: "standalone", start_url: "/" });
   expect(manifest.icons.map((i: { sizes: string }) => i.sizes)).toEqual(expect.arrayContaining(["192x192", "512x512"]));
   expect(manifest.icons.some((i: { purpose?: string }) => i.purpose === "maskable")).toBe(true);
   for (const icon of manifest.icons) {

@@ -240,7 +240,7 @@ function SessionNameForm({
       <Field label="Session name" htmlFor="session-name">
         <TextInput
           id="session-name"
-          placeholder="e.g. Gyansatr Day 4"
+          placeholder="e.g. Gyansatra Day 4"
           required
           autoFocus
           maxLength={NAME_MAX}

@@ -25,7 +25,7 @@ function scale(max: number) {
   return { top, ticks: Array.from({ length: top / step + 1 }, (_, i) => i * step) };
 }
 
-const shortDay = (r: DayRow) => r.eventName.replace("Gyansatr ", "");
+const shortDay = (r: DayRow) => r.eventName.replace("Gyansatra ", "");
 const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 
 /**

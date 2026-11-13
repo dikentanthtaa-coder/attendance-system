@@ -12,11 +12,11 @@ const face = Mukta_Vaani({
 });
 
 export const metadata: Metadata = {
-  title: "Gyansatr Attendance",
-  description: "Attendance management for the three-day Gyansatr event",
+  title: "Gyansatra Attendance",
+  description: "Attendance management for the three-day Gyansatra event",
   robots: { index: false, follow: false },
-  applicationName: "Gyansatr Attendance",
-  appleWebApp: { capable: true, title: "Gyansatr", statusBarStyle: "black-translucent" },
+  applicationName: "Gyansatra Attendance",
+  appleWebApp: { capable: true, title: "Gyansatra", statusBarStyle: "black-translucent" },
 };
 
 export const viewport: Viewport = {

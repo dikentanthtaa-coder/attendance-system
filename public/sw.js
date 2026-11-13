@@ -3,7 +3,7 @@
 // Only files that hold no personal data are ever stored on the device: the app's own code, icons
 // and the offline page. Pages and API replies, which hold member details, always go to the network,
 // so nothing is left behind on a shared phone, and attendance is never shown out of date.
-const CACHE = "gyansatr-static-v2";
+const CACHE = "gyansatra-static-v3";
 const OFFLINE_PAGE = "/offline.html";
 const MAX_ENTRIES = 150;
 

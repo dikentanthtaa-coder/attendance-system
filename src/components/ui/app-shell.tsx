@@ -37,7 +37,7 @@ function Brand({ subtitle, subtitleMore, page }: { subtitle: string; subtitleMor
     <div className="flex min-w-0 items-center gap-3">
       <Logo />
       <div className="min-w-0">
-        <p className="truncate text-base leading-tight font-bold">Gyansatr Attendance</p>
+        <p className="truncate text-base leading-tight font-bold">Gyansatra Attendance</p>
         <p className="truncate text-xs text-white/85">
           {subtitle}
           {subtitleMore && <span className="max-sm:hidden"> · {subtitleMore}</span>}
@@ -180,7 +180,7 @@ function MenuDrawer({
             <div className="min-w-0 flex-1 pl-1">
               <div className="flex items-center gap-3">
                 <Logo />
-                <p className="text-base leading-tight font-bold">Gyansatr Attendance</p>
+                <p className="text-base leading-tight font-bold">Gyansatra Attendance</p>
               </div>
             </div>
             <button

@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Hash, History, MapPin, Phone, Trash2 } from "lucide-react";
+import { Hash, History, MapPin, Phone, Search, Trash2 } from "lucide-react";
 import { RemoveAttendanceForm } from "@/components/remove-attendance";
-import { Alert, Button, Card, CardHeader, EmptyState, Field, GenderBadge, MetaList, Modal, Pagination, PersonRow, Select, Skeleton, useToast, type SelectOption } from "@/components/ui";
+import { Alert, Button, Card, CardHeader, EmptyState, Field, GenderBadge, MetaList, Modal, Pagination, PersonRow, SearchInput, Select, Skeleton, useToast, type SelectOption } from "@/components/ui";
 import { api } from "@/lib/client-api";
 import { formatTime, type EventSession, type Gender } from "@/lib/shared";
 
@@ -21,16 +21,23 @@ type HistoryRow = {
 
 export type HistoryPage = { records: HistoryRow[]; total: number; pageSize: number };
 
+// Short words, so both dropdowns fit side by side on a 320px phone.
 const SCOPE_OPTIONS: SelectOption[] = [
-  { value: "mine", label: "Marked by me" },
   { value: "all", label: "Everyone" },
+  { value: "mine", label: "Me" },
+];
+
+const GENDER_OPTIONS: SelectOption[] = [
+  { value: "all", label: "All" },
+  { value: "Male", label: "Male" },
+  { value: "Female", label: "Female" },
 ];
 
 /**
  * A list rather than a table, as it sits in a side column on large screens and fills a phone on small
  * ones. `version` changes whenever the day's count does, so a new mark appears here by itself.
- * An officer sees everyone of their own gender; only Admin chooses between "me" and everyone, and
- * only Admin can remove a mark made by mistake.
+ * An officer sees everyone of their own gender; only Admin chooses between "me" and everyone, filters
+ * by gender, and can remove a mark made by mistake. The search finds people the way marking does.
  */
 export function OfficerHistory({
   event,
@@ -47,15 +54,31 @@ export function OfficerHistory({
 }) {
   const toast = useToast();
   const [removing, setRemoving] = useState<HistoryRow | null>(null);
-  const [scope, setScope] = useState("mine");
+  // Everyone first: Admin opens History mostly to check or correct officers' marks.
+  const [scope, setScope] = useState("all");
+  const [gender, setGender] = useState("all");
+  const [typed, setTyped] = useState("");
+  const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [data, setData] = useState<HistoryPage | null>(initial);
   const [error, setError] = useState("");
   const [retryKey, setRetryKey] = useState(0);
 
+  // A short pause, so each keystroke doesn't send its own request.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setQuery(typed.trim());
+      setPage(1);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [typed]);
+
   useEffect(() => {
     const controller = new AbortController();
-    api<HistoryPage>(`/api/officer/history?day=${event.event_day}&scope=${scope}&page=${page}`, { signal: controller.signal })
+    const params = new URLSearchParams({ day: String(event.event_day), scope, page: String(page) });
+    if (query) params.set("q", query);
+    if (gender !== "all") params.set("gender", gender);
+    api<HistoryPage>(`/api/officer/history?${params}`, { signal: controller.signal })
       .then((result) => {
         setData(result);
         setError("");
@@ -64,21 +87,42 @@ export function OfficerHistory({
         if (err.name !== "AbortError") setError(err.message);
       });
     return () => controller.abort();
-  }, [event.event_day, scope, page, version, retryKey]);
+  }, [event.event_day, scope, gender, query, page, version, retryKey]);
+
+  const onlyMine = isAdmin && scope === "mine";
+  const narrowed = query !== "" || gender !== "all" || onlyMine;
 
   return (
     <Card aria-label="Attendance history" className="overflow-hidden lg:flex lg:min-h-0 lg:flex-1 lg:flex-col">
       <CardHeader
         title={<span className="inline-flex items-center gap-2"><History aria-hidden size={16} className="text-muted" />History{data ? ` (${data.total})` : ""}</span>}
         description={event.name}
-        actions={isAdmin && (
-          <div className="w-full sm:w-48">
-            <Field label="Show" htmlFor="history-scope">
+      />
+
+      <div className="flex flex-col gap-3 border-b border-rule p-4">
+        <Field label="Search" hint="Member ID, name or mobile" htmlFor="history-search">
+          <SearchInput
+            id="history-search"
+            placeholder="206383, Ghanshyam Pande, 9876543210"
+            enterKeyHint="search"
+            autoComplete="off"
+            autoCorrect="off"
+            value={typed}
+            onClear={() => setTyped("")}
+            onChange={(e) => setTyped(e.target.value)}
+          />
+        </Field>
+        {isAdmin && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Marked by" htmlFor="history-scope">
               <Select id="history-scope" value={scope} options={SCOPE_OPTIONS} onChange={(v) => { setScope(v); setPage(1); }} />
+            </Field>
+            <Field label="Gender" htmlFor="history-gender">
+              <Select id="history-gender" value={gender} active={gender !== "all"} options={GENDER_OPTIONS} onChange={(v) => { setGender(v); setPage(1); }} />
             </Field>
           </div>
         )}
-      />
+      </div>
 
       {error && (
         <div className="p-4">
@@ -92,8 +136,22 @@ export function OfficerHistory({
         </div>
       )}
 
-      {data && data.records.length === 0 && (
+      {data && data.records.length === 0 && !narrowed && (
         <EmptyState icon={History} titleAs="p" title="Nobody has been marked yet" description="People appear here as soon as they're marked Present." />
+      )}
+
+      {data && data.records.length === 0 && narrowed && (
+        <EmptyState
+          icon={Search}
+          titleAs="p"
+          title={query ? `Nobody here matches “${query}”` : gender !== "all" ? `No ${gender.toLowerCase()} members here yet` : "You haven't marked anyone yet"}
+          description={
+            onlyMine
+              ? "This list shows only people you marked. Officers' marks are under Everyone."
+              : `Only people marked Present on ${event.name} are listed.`
+          }
+          action={onlyMine && <Button variant="secondary" onClick={() => { setScope("all"); setPage(1); }}>Show Everyone</Button>}
+        />
       )}
 
       {data && data.records.length > 0 && (

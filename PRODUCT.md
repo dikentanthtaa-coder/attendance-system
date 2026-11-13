@@ -1,6 +1,6 @@
 # Product
 
-**Gyansatr Attendance** records who attended each day of the three-day Gyansatr event.
+**Gyansatra Attendance** records who attended each day of the three-day Gyansatra event.
 
 ## Who uses it, and where
 
@@ -24,4 +24,4 @@
 
 ## Tone
 
-Plain, calm and quick. Labels use the document's own words: Gyansatr Day 1, Quick Entry, Already Present. The duplicate-mobile warning keeps its exact Roman Gujarati wording from the requirements.
+Plain, calm and quick. Labels use the document's own words: Gyansatra Day 1, Quick Entry, Already Present. The duplicate-mobile warning keeps its exact Roman Gujarati wording from the requirements.

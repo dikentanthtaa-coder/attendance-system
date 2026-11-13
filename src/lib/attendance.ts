@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ApiError } from "./api";
 import type { SessionUser } from "./auth";
 import { getSql, isUniqueViolation, withTransaction } from "./db";
-import { isMemberIdValid, MEMBER_ID_DIGITS, normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName } from "./shared";
+import { isMemberIdValid, MEMBER_ID_DIGITS, normalizeCenter, normalizeMemberId, normalizeMobile, normalizeName, type Gender } from "./shared";
 
 type Sql = ReturnType<typeof getSql>;
 
@@ -58,15 +58,28 @@ function escapeLike(value: string) {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
+function cleanQuery(query: string) {
+  return query.trim().replace(/\s+/g, " ").slice(0, 80);
+}
+
+/** A Member ID that starts with it, the name rule above, or part of a mobile number. `q` comes from `cleanQuery` and isn't empty. */
+function memberMatches(sql: Sql, q: string) {
+  const digits = q.replace(/[\s+-]/g, "");
+  return sql`(
+    m.global_member_id like ${`${escapeLike(q.toUpperCase())}%`}
+    or m.name ~* ${nameSearchPattern(q)!}
+    ${/^\d+$/.test(digits) ? sql`or m.mobile like ${`%${digits}%`}` : sql``}
+  )`;
+}
+
 export async function searchMembers(user: SessionUser, query: string, eventDay: number, center: string | null = null) {
-  const q = query.trim().replace(/\s+/g, " ").slice(0, 80);
+  const q = cleanQuery(query);
   if (!q) return [];
 
   const sql = getSql();
   const idPrefix = `${escapeLike(q.toUpperCase())}%`;
   const digits = q.replace(/[\s+-]/g, "");
-  const mobilePattern = /^\d+$/.test(digits) ? `%${digits}%` : null;
-  const mobilePrefix = mobilePattern ? `${digits}%` : null;
+  const mobilePrefix = /^\d+$/.test(digits) ? `${digits}%` : null;
   const firstName = `^${escapeRegex(q.split(" ")[0])}`;
 
   const rows = await sql`
@@ -78,11 +91,7 @@ export async function searchMembers(user: SessionUser, query: string, eventDay: 
     left join app_users u on u.id = a.marked_by
     where ${user.genderScope ? sql`m.gender = ${user.genderScope}` : sql`true`}
       ${center ? sql`and m.center = ${center}` : sql``}
-      and (
-        m.global_member_id like ${idPrefix}
-        or m.name ~* ${nameSearchPattern(q)!}
-        ${mobilePattern ? sql`or m.mobile like ${mobilePattern}` : sql``}
-      )
+      and ${memberMatches(sql, q)}
     order by
       case
         when m.global_member_id = ${q.toUpperCase()} then 0
@@ -284,13 +293,24 @@ export async function quickEntry(user: SessionUser, input: z.output<typeof quick
 
 const HISTORY_PAGE_SIZE = 50;
 
-/** Who was marked on a day, newest first. Officers see their own gender; Admin can see everyone. */
-export async function listHistory(user: SessionUser, eventDay: number, scope: "mine" | "all", page: number) {
+/**
+ * Who was marked on a day, newest first. Officers see their own gender; Admin can see everyone.
+ * A search narrows it the same way the marking search finds people. Only Admin picks a gender.
+ */
+export async function listHistory(
+  user: SessionUser,
+  eventDay: number,
+  scope: "mine" | "all",
+  page: number,
+  { query = "", gender = null }: { query?: string; gender?: Gender | null } = {},
+) {
   const sql = getSql();
-  const limit = user.genderScope
-    ? sql`and m.gender = ${user.genderScope}`
-    : scope === "mine" ? sql`and a.marked_by = ${user.id}` : sql``;
-  const where = sql`a.event_day = ${eventDay} and a.status = 'present' ${limit}`;
+  const q = cleanQuery(query);
+  const onlyGender = user.genderScope ?? gender;
+  const where = sql`a.event_day = ${eventDay} and a.status = 'present'
+    ${onlyGender ? sql`and m.gender = ${onlyGender}` : sql``}
+    ${!user.genderScope && scope === "mine" ? sql`and a.marked_by = ${user.id}` : sql``}
+    ${q ? sql`and ${memberMatches(sql, q)}` : sql``}`;
   const [records, [{ total }]] = await Promise.all([
     sql`
       select a.id, a.marked_at, u.display_name as marked_by, a.marked_by = ${user.id} as is_mine,
@@ -346,7 +366,7 @@ export async function listDayCounts(user: Pick<SessionUser, "id">) {
 export async function getDeskData(user: SessionUser) {
   const events = await listEvents();
   const day = events.find((e) => e.status === "active")?.event_day ?? events[0]?.event_day ?? 1;
-  const [counts, history, unmarked] = await Promise.all([listDayCounts(user), listHistory(user, day, "mine", 1), listUnmarked(user, day, 1)]);
+  const [counts, history, unmarked] = await Promise.all([listDayCounts(user), listHistory(user, day, "all", 1), listUnmarked(user, day, 1)]);
   return JSON.parse(JSON.stringify({ events, counts, day, history, unmarked }));
 }
 
