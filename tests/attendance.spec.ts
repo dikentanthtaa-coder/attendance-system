@@ -783,6 +783,55 @@ test("Quick Entry mobile number: digits only and exactly 10", async () => {
   expect((await db`select mobile from members where name = 'Prefixed Number'`)[0].mobile).toBe("9876543215");
 });
 
+test("Quick Entry checks the Member ID while typing, like the mobile number, for every role", async () => {
+  await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values
+    ('700001', 'Idowner Male', '9876547001', 'Male', 'Surat', 'excel_import'),
+    ('700002', 'Idowner Female', '9876547002', 'Female', 'Surat', 'excel_import')`;
+  await officer.goto("/officer");
+  await officer.getByLabel(/Search by Member ID/).fill("Nobody Newname");
+  await officer.getByRole("button", { name: /Quick Entry/ }).click();
+  const panel = officer.getByRole("region", { name: "Quick Entry" });
+  const idBox = panel.getByLabel(/Global Member ID/);
+  const save = panel.getByRole("button", { name: "Save & Mark Present" });
+
+  // Nothing is said until all 6 digits are in.
+  await idBox.fill("70000");
+  await expect(panel).toContainText("5 of 6 digits");
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+
+  // Taken by someone this officer can see: named, with a way to find them, and saving is blocked.
+  await idBox.fill("700001");
+  const alert = panel.getByRole("alert");
+  await expect(alert).toContainText("Member ID 700001 already belongs to Idowner Male.");
+  await expect(save).toBeDisabled();
+  await officer.screenshot({ path: "test-results/screens/quick-entry-id-taken.png", fullPage: true });
+
+  // Taken by someone of the other gender: not named.
+  await idBox.fill("700002");
+  await expect(alert).toContainText("Member ID 700002 is already in use.");
+  await expect(alert).not.toContainText("Idowner Female");
+  await expect(alert.getByRole("button", { name: "Find this member" })).toHaveCount(0);
+
+  // A free ID clears it.
+  await idBox.fill("700003");
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await expect(save).toBeEnabled();
+
+  // Find this member goes back to the search with the ID typed in.
+  await idBox.fill("700001");
+  await panel.getByRole("alert").getByRole("button", { name: "Find this member" }).click();
+  await expect(officer.getByLabel(/Search by Member ID/)).toHaveValue("700001");
+  await expect(officer.getByRole("region", { name: "Search results" })).toContainText("Idowner Male");
+
+  // Every role gets the check. Admin, who covers everyone, sees the owner's name whatever their gender.
+  const check = async (api: APIRequestContext, id: string) => (await (await api.get(`/api/officer/check-duplicate?memberId=${id}`)).json()).memberIdTaken;
+  expect(await check(adminApi, "700002")).toEqual({ name: "Idowner Female" });
+  expect(await check(officer2Api, "700002")).toEqual({ name: "Idowner Female" });
+  expect(await check(officerApi, "700002")).toEqual({ name: null });
+  expect(await check(officerApi, "700009")).toBeNull();
+  expect(await check(officerApi, "7000")).toBeNull(); // only a complete ID is checked
+});
+
 test("Admin adds a member by hand: checked like Quick Entry, saved as Register, not marked present", async () => {
   await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values ('400100', 'Family Head', '9876540001', 'Female', 'Surat', 'excel_import')`;
   await admin.goto("/admin/members");

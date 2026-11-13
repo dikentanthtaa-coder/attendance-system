@@ -169,11 +169,17 @@ export async function findMobileMatches(sql: Sql, mobile: string) {
  * is usually family sharing a number, and only the name matching can be two different people, so
  * those ask the officer to check first. Details are only given for members this account can see.
  */
-export async function findDuplicates(user: SessionUser, name: string, mobile: string | null, sql: Sql = getSql()) {
+/**
+ * Who a new member might already be. `memberId` is checked only when it's a complete Member ID:
+ * one ID belongs to one person, so a taken ID can't be used again. The owner is named only when
+ * this account may see them.
+ */
+export async function findDuplicates(user: SessionUser, name: string, mobile: string | null, sql: Sql = getSql(), memberId: string | null = null) {
   const scope = user.genderScope ? sql`gender = ${user.genderScope}` : sql`true`;
   const [exact] = name && mobile
     ? await sql`select name, gender from members where mobile = ${mobile} and lower(name) = lower(${name}) limit 1`
     : [];
+  const [idOwner] = memberId ? await sql`select name, gender from members where global_member_id = ${memberId}` : [];
   const [mobileMatches, nameMatches] = await Promise.all([
     mobile ? findMobileMatches(sql, mobile) : [],
     name
@@ -184,6 +190,7 @@ export async function findDuplicates(user: SessionUser, name: string, mobile: st
   ]);
   return {
     exact: exact ? { name: !user.genderScope || exact.gender === user.genderScope ? (exact.name as string) : null } : null,
+    memberIdTaken: idOwner ? { name: !user.genderScope || idOwner.gender === user.genderScope ? (idOwner.name as string) : null } : null,
     mobileMatches,
     nameMatches: nameMatches.map((m) => ({ name: m.name as string, memberId: m.global_member_id as string | null, mobile: m.mobile as string | null, center: m.center as string })),
   };
@@ -204,12 +211,12 @@ export const memberCenterField = z.string().max(80, "Center name is too long.").
 export async function refuseTakenMemberId(tx: Sql, user: SessionUser, globalId: string) {
   const [taken] = await tx`select name, gender from members where global_member_id = ${globalId}`;
   if (!taken) return;
+  const visible = !user.genderScope || taken.gender === user.genderScope;
   throw new ApiError(
     409,
     "member_id_taken",
-    !user.genderScope || taken.gender === user.genderScope
-      ? `Member ID ${globalId} already belongs to ${taken.name}. Search for this member instead.`
-      : `Member ID ${globalId} is already in use.`,
+    visible ? `Member ID ${globalId} already belongs to ${taken.name}. Search for this member instead.` : `Member ID ${globalId} is already in use.`,
+    { name: visible ? (taken.name as string) : null },
   );
 }
 
