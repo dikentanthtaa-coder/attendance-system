@@ -53,7 +53,7 @@ const showWhere = (sql: Sql, f: DayReportFilters) => {
  * session. A is never stored: it's worked out from there being no mark once the day has ended.
  */
 async function reportDays(sql: Sql) {
-  const days = await sql`select event_day, name, status from event_sessions where status <> 'not_started' order by event_day`;
+  const days = await sql`select event_day, name, status from event_sessions where status <> 'not_started' order by coalesce(day_no, event_day), event_day`;
   return days.map((d) => ({ day: d.event_day as number, name: d.name as string, status: d.status as EventStatus }));
 }
 

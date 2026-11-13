@@ -77,8 +77,8 @@ export async function getSummary(f: ReportFilters) {
       join members m on m.id = a.member_id
       join event_sessions e on e.event_day = a.event_day
       where ${where}
-      group by a.event_day, e.name, 3
-      order by a.event_day, 3`,
+      group by a.event_day, e.day_no, e.name, 3
+      order by coalesce(e.day_no, a.event_day), a.event_day, 3`,
     sql`
       select
         count(*)::int as total,
@@ -136,7 +136,7 @@ export async function getSummary(f: ReportFilters) {
 export async function getFilterOptions() {
   const sql = getSql();
   const [events, centers, dates, officers] = await Promise.all([
-    sql`select event_day, name from event_sessions order by event_day`,
+    sql`select event_day, name from event_sessions order by coalesce(day_no, event_day), event_day`,
     sql`select distinct center from members order by center`,
     sql`
       select distinct ((marked_at at time zone ${IST})::date)::text as date

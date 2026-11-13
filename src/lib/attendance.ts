@@ -370,8 +370,9 @@ export async function getDeskData(user: SessionUser) {
   return JSON.parse(JSON.stringify({ events, counts, day, history, unmarked }));
 }
 
+/** Sessions in order: by their day, then in the order they were added to it. */
 export async function listEvents(sql: Sql = getSql()) {
   return sql`
-    select event_day, name, status, started_at, ended_at
-    from event_sessions order by event_day`;
+    select event_day, coalesce(day_no, event_day)::int as day_no, name, status, started_at, ended_at
+    from event_sessions order by coalesce(day_no, event_day), event_day`;
 }

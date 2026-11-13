@@ -45,7 +45,10 @@ export const SOURCE_LABEL: Record<MemberSource, string> = {
 };
 
 export type EventSession = {
+  /** The session's own number: its attendance points to this. */
   event_day: number;
+  /** Which day it belongs to. A day can have several sessions, such as Morning and Evening. */
+  day_no: number;
   name: string;
   status: EventStatus;
   started_at: string | null;

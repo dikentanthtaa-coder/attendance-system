@@ -2099,14 +2099,15 @@ test("it installs as an app, and stores nothing personal on the device", async (
 
 test("Admin adds, renames and removes sessions beyond the first three", async () => {
   await admin.goto("/admin");
-  await admin.getByRole("button", { name: "New Session" }).click();
+  await admin.getByRole("button", { name: "New Day" }).click();
   await admin.getByLabel("Session name").fill("  Youth   Shibir ");
-  await admin.getByRole("dialog").getByRole("button", { name: "Add Session" }).click();
+  await admin.getByRole("dialog").getByRole("button", { name: "Add Day" }).click();
   await expect(admin.getByRole("status")).toContainText("Added: Youth Shibir");
   const card = admin.getByRole("article").filter({ hasText: "Youth Shibir" });
   await expect(card).toContainText("Not Started");
   const [created] = await db`select event_day, status from event_sessions where name = 'Youth Shibir'`;
   expect(created).toMatchObject({ event_day: 4, status: "not_started" });
+  await expect(admin.getByRole("region", { name: "Day 4", exact: true })).toContainText("Youth Shibir"); // a day of its own
 
   // Names are unique, ignoring case, and can't be blank.
   expect((await adminApi.post("/api/admin/events", { data: { name: "youth shibir" } })).status()).toBe(409);
@@ -2140,6 +2141,54 @@ test("Admin adds, renames and removes sessions beyond the first three", async ()
   await admin.getByRole("dialog").getByRole("button", { name: "Remove Session" }).click();
   await expect(admin.getByRole("status")).toContainText("Removed: Added by mistake");
   expect((await db`select count(*)::int as n from event_sessions where name = 'Added by mistake'`)[0].n).toBe(0);
+});
+
+test("a day can have several sessions, such as Morning and Evening, each with its own attendance", async () => {
+  await admin.goto("/admin");
+  const day2 = admin.getByRole("region", { name: "Day 2", exact: true });
+  await day2.getByRole("button", { name: "Add a session to Day 2" }).click();
+  const dialog = admin.getByRole("dialog");
+  await expect(dialog).toContainText("It's added to Day 2");
+  await dialog.getByLabel("Session name").fill("Gyansatra Day 2 Evening");
+  await dialog.getByRole("button", { name: "Add Session" }).click();
+  await expect(admin.getByRole("status")).toContainText("Added: Gyansatra Day 2 Evening");
+  await expect(day2).toContainText("2 sessions");
+  await expect(day2.getByRole("article").filter({ hasText: "Gyansatra Day 2 Evening" })).toContainText("Not Started");
+  await admin.screenshot({ path: "test-results/screens/admin-day-sessions.png", fullPage: true });
+
+  // Listed straight after Day 2 everywhere, though it was added after Day 4.
+  const [evening] = await db`select event_day, day_no from event_sessions where name = 'Gyansatra Day 2 Evening'`;
+  expect(evening.day_no).toBe(2);
+  expect(evening.event_day).toBeGreaterThan(4);
+  const names = ((await (await officerApi.get("/api/events")).json()).events as { name: string }[]).map((e) => e.name);
+  expect(names.indexOf("Gyansatra Day 2 Evening")).toBe(names.indexOf("Gyansatra Day 2") + 1);
+  const options = (await (await adminApi.get("/api/admin/report")).json()).options.events.map((e: { name: string }) => e.name);
+  expect(options.indexOf("Gyansatra Day 2 Evening")).toBe(options.indexOf("Gyansatra Day 2") + 1);
+
+  // Only Admin adds one, and only to a day that exists.
+  expect((await adminApi.post("/api/admin/events", { data: { name: "Nowhere Evening", dayNo: 999 } })).status()).toBe(404);
+  expect((await officerApi.post("/api/admin/events", { data: { name: "Not allowed", dayNo: 2 } })).status()).toBe(403);
+
+  // Its own attendance: someone already present in another session is marked again in this one.
+  const wasActive = (await db`select event_day from event_sessions where status = 'active'`)[0]?.event_day as number | undefined;
+  if (wasActive) expect((await setEvent(adminApi, wasActive, "end")).status()).toBe(200);
+  expect((await setEvent(adminApi, evening.event_day, "start")).status()).toBe(200);
+  const person = await memberId("100001");
+  const before = await db`select event_day from attendance where member_id = ${person} and status = 'present' order by event_day`;
+  expect(before.length).toBeGreaterThan(0);
+  expect((await (await mark(officerApi, person, evening.event_day)).json()).status).toBe("marked");
+  expect(await db`select event_day from attendance where member_id = ${person} and status = 'present' and event_day <> ${evening.event_day} order by event_day`).toEqual(before);
+
+  // The P/A report gives it its own column, next to Day 2's.
+  const report = await (await adminApi.get(`/api/admin/day-report?show=P:${evening.event_day}`)).json();
+  expect(report.rows.map((r: { name: string }) => r.name)).toEqual(["Person1 Surname1"]);
+  const columns = report.days.map((d: { name: string }) => d.name);
+  const at = columns.indexOf("Gyansatra Day 2 Evening");
+  expect(at).toBeGreaterThan(columns.indexOf("Gyansatra Day 2"));
+  if (columns.includes("Gyansatra Day 3")) expect(at).toBeLessThan(columns.indexOf("Gyansatra Day 3"));
+
+  expect((await setEvent(adminApi, evening.event_day, "end")).status()).toBe(200);
+  if (wasActive) expect((await setEvent(adminApi, wasActive, "restart")).status()).toBe(200);
 });
 
 test("a new upload replaces the earlier list, and Admin can clear attendance, both behind the Admin password", async () => {

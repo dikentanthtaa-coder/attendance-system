@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { CalendarPlus, Pencil, Play, RotateCcw, Square, Trash2, UserCheck, type LucideIcon } from "lucide-react";
+import { CalendarPlus, Pencil, Play, Plus, RotateCcw, Square, Trash2, UserCheck, type LucideIcon } from "lucide-react";
 import { EventDayCard } from "@/components/event-days";
 import {
   Alert,
@@ -49,8 +49,21 @@ const ACTIONS: Record<Action, { title: string; label: string; icon: LucideIcon; 
 const NAME_MAX = 60;
 
 
-/** null: closed. "new": adding a session. A session: renaming it. */
-type Naming = "new" | EventSession | null;
+/** What the name dialog is for: a new day, another session in a day (such as Evening), or a rename. */
+type Naming = { kind: "day" } | { kind: "session"; day: Day } | { kind: "rename"; session: EventSession } | null;
+
+/** A day and its sessions, in order. Days are numbered by position, so removing one leaves no gap. */
+type Day = { dayNo: number; label: string; sessions: EventSession[] };
+
+function groupByDay(events: EventSession[]): Day[] {
+  const days: Day[] = [];
+  for (const event of events) {
+    const last = days.at(-1);
+    if (last && last.dayNo === event.day_no) last.sessions.push(event);
+    else days.push({ dayNo: event.day_no, label: `Day ${days.length + 1}`, sessions: [event] });
+  }
+  return days;
+}
 
 export function EventControls({ initialEvents }: { initialEvents: EventSession[] }) {
   const toast = useToast();
@@ -61,6 +74,7 @@ export function EventControls({ initialEvents }: { initialEvents: EventSession[]
   const [removing, setRemoving] = useState<EventSession | null>(null);
 
   const active = events.find((e) => e.status === "active");
+  const days = groupByDay(events);
 
   const reload = () => api<{ events: EventSession[] }>("/api/events").then((d) => setEvents(d.events)).catch(() => {});
 
@@ -110,11 +124,23 @@ export function EventControls({ initialEvents }: { initialEvents: EventSession[]
 
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-bold">Sessions <span className="font-semibold text-muted">({events.length})</span></h2>
-        <Button variant="secondary" size="sm" icon={CalendarPlus} onClick={() => setNaming("new")}>New Session</Button>
+        <Button variant="secondary" size="sm" icon={CalendarPlus} onClick={() => setNaming({ kind: "day" })}>New Day</Button>
       </div>
 
-      <div className="-mt-1 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {events.map((event, index) => {
+      {/* Each day lists its sessions, such as Morning and Evening, and can take another. Each session has its own attendance. */}
+      {days.map((day) => (
+      <section key={day.dayNo} aria-label={day.label} className="-mt-1 flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-muted">
+            {day.label}
+            {day.sessions.length > 1 && <span className="font-normal"> · {day.sessions.length} sessions</span>}
+          </h3>
+          <Button variant="ghost" size="sm" icon={Plus} aria-label={`Add a session to ${day.label}`} onClick={() => setNaming({ kind: "session", day })}>
+            Add Session
+          </Button>
+        </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {day.sessions.map((event, index) => {
           const action: Action = event.status === "not_started" ? "start" : event.status === "active" ? "end" : "restart";
           const blocked = action !== "end" && Boolean(active);
           const look = ACTIONS[action];
@@ -131,7 +157,7 @@ export function EventControls({ initialEvents }: { initialEvents: EventSession[]
               }
               tools={
                 <>
-                  <IconButton icon={Pencil} label={`Rename ${event.name}`} onClick={() => setNaming(event)} />
+                  <IconButton icon={Pencil} label={`Rename ${event.name}`} onClick={() => setNaming({ kind: "rename", session: event })} />
                   {/* Only a session that never started can go, so no attendance is ever lost. */}
                   {event.status === "not_started" && events.length > 1 && (
                     <IconButton icon={Trash2} label={`Remove ${event.name}`} danger onClick={() => setRemoving(event)} />
@@ -148,6 +174,8 @@ export function EventControls({ initialEvents }: { initialEvents: EventSession[]
           );
         })}
       </div>
+      </section>
+      ))}
 
       <ConfirmDialog
         open={pending !== null}
@@ -171,16 +199,20 @@ export function EventControls({ initialEvents }: { initialEvents: EventSession[]
         onCancel={() => setRemoving(null)}
       />
 
-      <Modal open={naming !== null} onClose={() => setNaming(null)} title={naming === "new" ? "New session" : "Rename session"}>
+      <Modal
+        open={naming !== null}
+        onClose={() => setNaming(null)}
+        title={naming?.kind === "day" ? "New day" : naming?.kind === "session" ? `Add a session to ${naming.day.label}` : "Rename session"}
+      >
         {naming !== null && (
           <SessionNameForm
-            key={naming === "new" ? "new" : naming.event_day}
-            session={naming === "new" ? null : naming}
+            key={naming.kind === "rename" ? naming.session.event_day : naming.kind === "session" ? `day-${naming.day.dayNo}` : "day"}
+            naming={naming}
             onClose={() => setNaming(null)}
             onSaved={(next, name) => {
               setEvents(next);
               setNaming(null);
-              toast("success", naming === "new" ? `Added: ${name}` : `Renamed to ${name}`);
+              toast("success", naming.kind === "rename" ? `Renamed to ${name}` : `Added: ${name}`);
             }}
           />
         )}
@@ -204,14 +236,16 @@ function IconButton({ icon: Icon, label, danger, onClick }: { icon: LucideIcon; 
 }
 
 function SessionNameForm({
-  session,
+  naming,
   onClose,
   onSaved,
 }: {
-  session: EventSession | null;
+  naming: Exclude<Naming, null>;
   onClose: () => void;
   onSaved: (events: EventSession[], name: string) => void;
 }) {
+  const session = naming.kind === "rename" ? naming.session : null;
+  const day = naming.kind === "session" ? naming.day : null;
   const [name, setName] = useState(session?.name ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -226,7 +260,7 @@ function SessionNameForm({
     try {
       const data = session
         ? await api<{ events: EventSession[] }>(`/api/admin/events/${session.event_day}`, { method: "PATCH", json: { name: clean } })
-        : await api<{ events: EventSession[] }>("/api/admin/events", { json: { name: clean } });
+        : await api<{ events: EventSession[] }>("/api/admin/events", { json: { name: clean, dayNo: day?.dayNo } });
       onSaved(data.events, clean);
     } catch (err) {
       setError((err as Error).message);
@@ -236,11 +270,20 @@ function SessionNameForm({
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
-      {!session && <p className="text-sm text-muted">It&apos;s added after the other sessions as Not Started. Start it when it&apos;s time to mark attendance.</p>}
+      {naming.kind === "day" && (
+        <p className="text-sm text-muted">
+          It&apos;s added after the other days as Not Started. To split a day into sessions such as Morning and Evening, use Add Session under that day.
+        </p>
+      )}
+      {day && (
+        <p className="text-sm text-muted">
+          It&apos;s added to {day.label}, after {day.sessions.length === 1 ? day.sessions[0].name : "its other sessions"}, as Not Started. It has its own attendance, so people are marked again in it.
+        </p>
+      )}
       <Field label="Session name" htmlFor="session-name">
         <TextInput
           id="session-name"
-          placeholder="e.g. Gyansatra Day 4"
+          placeholder={day ? `e.g. Gyansatra ${day.label} Evening` : "e.g. Gyansatra Day 4"}
           required
           autoFocus
           maxLength={NAME_MAX}
@@ -254,8 +297,8 @@ function SessionNameForm({
       {error && <Alert tone="danger" title={error} />}
       <ModalActions>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button type="submit" icon={session ? Pencil : CalendarPlus} loading={busy}>
-          {busy ? "Saving…" : session ? "Rename Session" : "Add Session"}
+        <Button type="submit" icon={session ? Pencil : day ? Plus : CalendarPlus} loading={busy}>
+          {busy ? "Saving…" : session ? "Rename Session" : day ? "Add Session" : "Add Day"}
         </Button>
       </ModalActions>
     </form>
