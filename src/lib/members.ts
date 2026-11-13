@@ -76,7 +76,9 @@ export async function listMembers(filters: MemberFilters, page: number) {
   const [members, [{ total }], centers] = await Promise.all([
     sql`
       select m.id, m.global_member_id, m.name, m.mobile, m.gender, m.center, m.created_source,
-             (select count(*)::int from attendance a where a.member_id = m.id and a.status = 'present') as attendance_count
+             -- Days, not sessions: Morning and Evening of the same day count once.
+             (select count(distinct coalesce(e.day_no, e.event_day))::int from attendance a join event_sessions e on e.event_day = a.event_day
+              where a.member_id = m.id and a.status = 'present') as days_present
       from members m where ${where}
       order by m.name, m.id
       limit ${PAGE_SIZE} offset ${(page - 1) * PAGE_SIZE}`,

@@ -53,8 +53,11 @@ const showWhere = (sql: Sql, f: DayReportFilters) => {
  * session. A is never stored: it's worked out from there being no mark once the day has ended.
  */
 async function reportDays(sql: Sql) {
-  const days = await sql`select event_day, name, status from event_sessions where status <> 'not_started' order by coalesce(day_no, event_day), event_day`;
-  return days.map((d) => ({ day: d.event_day as number, name: d.name as string, status: d.status as EventStatus }));
+  const days = await sql`
+    select event_day, coalesce(day_no, event_day)::int as day_no, name, status
+    from event_sessions where status <> 'not_started' order by coalesce(day_no, event_day), event_day`;
+  // `day` is the session (each has its own column); `dayNo` is the day it belongs to, such as Morning and Evening of Day 2.
+  return days.map((d) => ({ day: d.event_day as number, dayNo: d.day_no as number, name: d.name as string, status: d.status as EventStatus }));
 }
 
 const rowsQuery = (sql: Sql, f: DayReportFilters) => sql`
@@ -126,6 +129,7 @@ export async function buildDayReportExport(f: DayReportFilters) {
     { header: "Center", width: 18 },
     { header: "Status", width: 15 },
     ...days.map((d) => ({ header: d.name, width: Math.max(8, Math.min(24, d.name.length + 2)) })),
+    { header: "Sessions Present", width: 16 },
     { header: "Days Present", width: 13 },
   ];
   const header = sheet.getRow(1);
@@ -140,7 +144,10 @@ export async function buildDayReportExport(f: DayReportFilters) {
     const marked = r.present_days as number[];
     const cells = days.map((d) => dayCell(d.status, marked.includes(d.day)));
     const isQuick = r.created_source === "quick_entry";
-    const row = sheet.addRow([i + 1, r.global_member_id ?? "", r.name, r.mobile ?? "", r.gender, r.center, SOURCE_LABEL[r.created_source as MemberSource], ...cells, marked.filter((d) => present.has(d)).length]);
+    // Present in Morning and Evening of the same day is 2 sessions but 1 day.
+    const attended = days.filter((d) => marked.includes(d.day));
+    const daysPresent = new Set(attended.map((d) => d.dayNo)).size;
+    const row = sheet.addRow([i + 1, r.global_member_id ?? "", r.name, r.mobile ?? "", r.gender, r.center, SOURCE_LABEL[r.created_source as MemberSource], ...cells, attended.length, daysPresent]);
     if (isQuick) {
       const status = row.getCell(7);
       status.font = { bold: true };
@@ -157,11 +164,11 @@ export async function buildDayReportExport(f: DayReportFilters) {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: FILLS[cells[c]] } };
     });
   });
-  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 8 + days.length } };
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 9 + days.length } };
 
   const summary = workbook.addWorksheet("Totals");
   summary.columns = [{ width: 18 }, { width: 12 }, { width: 10 }, { width: 15 }, { width: 14 }, { width: 10 }];
-  const top = summary.addRow(["Day", "Status", "Present", SOURCE_LABEL.quick_entry, "Total Present", "Absent"]);
+  const top = summary.addRow(["Session", "Status", "Present", SOURCE_LABEL.quick_entry, "Total Present", "Absent"]);
   top.font = { bold: true };
   for (const d of days) {
     const total = present.get(d.day) ?? 0;
@@ -171,7 +178,8 @@ export async function buildDayReportExport(f: DayReportFilters) {
   summary.addRow([]);
   summary.addRow(["Members in report", rows.length]);
   summary.addRow([]);
-  summary.addRow(["P = present. A = absent. - = day still running, not marked yet."]);
+  summary.addRow(["P = present. A = absent. - = session still running, not marked yet."]);
+  summary.addRow(["Sessions Present counts every session attended. Days Present counts a day once, even if attended in more than one of its sessions."]);
   summary.addRow([`Present + ${SOURCE_LABEL.quick_entry} = Total Present.`]);
 
   const part = days.length > 0 && days.length === sessions ? "all-days" : days.length === 0 ? "no-days" : `day-${days.map((d) => d.day).join("-")}`;

@@ -55,7 +55,7 @@ type Member = {
   gender: Gender;
   center: string;
   created_source: MemberSource;
-  attendance_count: number;
+  days_present: number;
 };
 
 type MemberPage = { members: Member[]; total: number; pageSize: number; centers: string[] };
@@ -424,7 +424,7 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
     { key: "gender", header: "Gender", cell: (m) => <GenderBadge gender={m.gender} /> },
     { key: "center", header: "Center", cell: (m) => <span className="text-muted">{m.center}</span> },
     { key: "source", header: "Source", cell: (m) => <SourceBadge source={m.created_source} /> },
-    { key: "days", header: "Days present", align: "right", cell: (m) => <span className="font-semibold">{m.attendance_count}</span> },
+    { key: "days", header: "Days present", align: "right", cell: (m) => <span className="font-semibold">{m.days_present}</span> },
     { key: "actions", header: "Actions", hideHeader: true, align: "right", nowrap: true, cell: actions },
   ];
 
@@ -508,7 +508,7 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
                     m.global_member_id ? { icon: Hash, label: m.global_member_id, strong: true } : null,
                     m.mobile ? { icon: Phone, label: m.mobile } : null,
                     { icon: MapPin, label: m.center },
-                    { icon: CalendarCheck, label: `Present on ${m.attendance_count} day${m.attendance_count === 1 ? "" : "s"}` },
+                    { icon: CalendarCheck, label: `Present on ${m.days_present} day${m.days_present === 1 ? "" : "s"}` },
                   ]}
                 />
               }
@@ -564,8 +564,8 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
           deleting && (
             <>
               Delete <strong className="font-semibold">{deleting.name}</strong>?
-              {deleting.attendance_count > 0 && (
-                <> Their attendance for <strong className="font-semibold">{deleting.attendance_count} day(s)</strong> will be removed from reports too.</>
+              {deleting.days_present > 0 && (
+                <> Their attendance for <strong className="font-semibold">{deleting.days_present} day(s)</strong> will be removed from reports too.</>
               )}
             </>
           )

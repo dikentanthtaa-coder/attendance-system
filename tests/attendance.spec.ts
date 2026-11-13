@@ -1439,16 +1439,16 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   const [download] = await Promise.all([admin.waitForEvent("download"), admin.getByRole("link", { name: "Download Excel" }).click()]);
   expect(download.suggestedFilename()).toBe("attendance_report_day-1-2.xlsx");
   const running = await read(readFileSync(await download.path()));
-  expect(running.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Gyansatra Day 1", "Gyansatra Day 2", "Days Present"]);
+  expect(running.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Gyansatra Day 1", "Gyansatra Day 2", "Sessions Present", "Days Present"]);
   expect(running.rows.get("Kiran Desai")!.Status).toBe("Quick Member");
   expect(running.rows.get("Suresh Shah")!.Status).toBe("Register");
   // The Totals sheet adds up the same way as the page.
   const totalsRow = (running.wb.getWorksheet("Totals")!.getRow(2).values as unknown[]).slice(1);
-  expect((running.wb.getWorksheet("Totals")!.getRow(1).values as unknown[]).slice(1)).toEqual(["Day", "Status", "Present", "Quick Member", "Total Present", "Absent"]);
+  expect((running.wb.getWorksheet("Totals")!.getRow(1).values as unknown[]).slice(1)).toEqual(["Session", "Status", "Present", "Quick Member", "Total Present", "Absent"]);
   expect(totalsRow).toEqual(["Gyansatra Day 1", "Ended", (await presentOn(1)) - (await quickOn(1)), await quickOn(1), await presentOn(1), members - (await presentOn(1))]);
   expect(running.rows.size).toBe(members);
-  expect(running.rows.get(nobody)).toMatchObject({ "Gyansatra Day 1": "A", "Gyansatra Day 2": "-", "Days Present": 0 });
-  expect(running.rows.get("Suresh Shah")).toMatchObject({ "Gyansatra Day 1": "P", "Gyansatra Day 2": "P", "Days Present": 2 });
+  expect(running.rows.get(nobody)).toMatchObject({ "Gyansatra Day 1": "A", "Gyansatra Day 2": "-", "Sessions Present": 0, "Days Present": 0 });
+  expect(running.rows.get("Suresh Shah")).toMatchObject({ "Gyansatra Day 1": "P", "Gyansatra Day 2": "P", "Sessions Present": 2, "Days Present": 2 });
 
   // Ending Day 2 turns its blanks into A, and the toast points to the report.
   await admin.goto("/admin");
@@ -1467,7 +1467,7 @@ test("the P/A report: one column per day, A filled in when a day ends, and all t
   const merged = await adminApi.get("/api/admin/day-report/export");
   expect(merged.headers()["content-disposition"]).toContain("attendance_report_all-days.xlsx");
   const all = await read(await merged.body());
-  expect(all.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Gyansatra Day 1", "Gyansatra Day 2", "Gyansatra Day 3", "Days Present"]);
+  expect(all.header).toEqual(["Sr", "Member ID", "Name", "Mobile", "Gender", "Center", "Status", "Gyansatra Day 1", "Gyansatra Day 2", "Gyansatra Day 3", "Sessions Present", "Days Present"]);
   expect(all.rows.get(nobody)).toMatchObject({ "Gyansatra Day 1": "A", "Gyansatra Day 2": "A", "Gyansatra Day 3": "P", "Days Present": 1 });
   expect(all.rows.get("Suresh Shah")).toMatchObject({ "Gyansatra Day 1": "P", "Gyansatra Day 2": "P", "Gyansatra Day 3": "A", "Days Present": 2 });
   const totals = JSON.stringify(all.wb.getWorksheet("Totals")!.getSheetValues());
@@ -2235,6 +2235,33 @@ test("a day can have several sessions, such as Morning and Evening, each with it
   const at = columns.indexOf("Gyansatra Day 2 Evening");
   expect(at).toBeGreaterThan(columns.indexOf("Gyansatra Day 2"));
   if (columns.includes("Gyansatra Day 3")) expect(at).toBeLessThan(columns.indexOf("Gyansatra Day 3"));
+
+  // In the Excel file, Morning and Evening of one day are 2 sessions but 1 day.
+  const [officerRow] = await db`select id from app_users where username = 'male.officer'`;
+  await db`insert into attendance (member_id, event_day, marked_by) values (${person}, 2, ${officerRow.id}) on conflict (member_id, event_day) do update set status = 'present'`;
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load((await (await adminApi.get("/api/admin/day-report/export")).body()) as never);
+  const sheet = wb.getWorksheet("P-A Report")!;
+  const header = (sheet.getRow(1).values as string[]).slice(1);
+  expect(header.slice(-2)).toEqual(["Sessions Present", "Days Present"]);
+  let row: Record<string, unknown> = {};
+  sheet.eachRow((r) => {
+    const values = (r.values as unknown[]).slice(1);
+    if (values[2] === "Person1 Surname1") row = Object.fromEntries(header.map((h, i) => [h, values[i]]));
+  });
+  expect(row).toMatchObject({ "Gyansatra Day 2": "P", "Gyansatra Day 2 Evening": "P" });
+  const started = await db`select event_day, coalesce(day_no, event_day) as day_no from event_sessions where status <> 'not_started'`;
+  const marks = (await db`select event_day from attendance where member_id = ${person} and status = 'present'`).map((m) => m.event_day);
+  const attended = started.filter((s) => marks.includes(s.event_day));
+  expect(row["Sessions Present"]).toBe(attended.length);
+  expect(row["Days Present"]).toBe(new Set(attended.map((s) => s.day_no)).size);
+  expect(row["Days Present"] as number).toBeLessThan(row["Sessions Present"] as number);
+  const totalsHead = (wb.getWorksheet("Totals")!.getRow(1).values as unknown[]).slice(1);
+  expect(totalsHead[0]).toBe("Session");
+
+  // Members counts days too, not sessions.
+  const listed = await (await adminApi.get(`/api/admin/members?q=${encodeURIComponent("Person1 Surname1")}`)).json();
+  expect(listed.members.find((m: { name: string }) => m.name === "Person1 Surname1").days_present).toBe(row["Days Present"]);
 
   expect((await setEvent(adminApi, evening.event_day, "end")).status()).toBe(200);
   if (wasActive) expect((await setEvent(adminApi, wasActive, "restart")).status()).toBe(200);
