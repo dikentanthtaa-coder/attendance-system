@@ -490,6 +490,37 @@ test("Enter marks only when there is exactly one match", async () => {
   await expect(officer.getByRole("status")).toContainText("Present: Ramesh K Patel");
 });
 
+test("while one person is saving, only their button waits, and the others can still be marked", async () => {
+  await db`insert into members (global_member_id, name, mobile, gender, center, created_source) values
+    ('6101', 'Wait Alpha', '9876546101', 'Male', 'Surat', 'excel_import'),
+    ('6102', 'Wait Beta', '9876546102', 'Male', 'Surat', 'excel_import')`;
+  const alphaId = await memberId("6101");
+  await officer.goto("/officer");
+  await officer.getByLabel(/Search by Member ID/).fill("wait");
+  const results = officer.getByRole("region", { name: "Search results" });
+  const alpha = results.getByRole("listitem").filter({ hasText: "Wait Alpha" }).getByRole("button", { name: "Mark Present" });
+  const beta = results.getByRole("listitem").filter({ hasText: "Wait Beta" }).getByRole("button", { name: "Mark Present" });
+
+  // Alpha's save is held back, as on a slow connection.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await officer.route("**/api/officer/attendance", async (route) => {
+    if (route.request().postDataJSON().memberId === alphaId) await held;
+    await route.continue();
+  });
+
+  await alpha.click();
+  await expect(alpha).toBeDisabled();
+  await expect(beta).toBeEnabled();
+  await officer.screenshot({ path: "test-results/screens/marking-one-row-waits.png", fullPage: true });
+  await beta.click();
+  await expect(officer.getByRole("status")).toContainText("Present: Wait Beta");
+  release();
+  await expect(officer.getByRole("status")).toContainText("Present: Wait Alpha");
+  await officer.unroute("**/api/officer/attendance");
+  expect((await db`select count(*)::int as n from attendance a join members m on m.id = a.member_id where m.global_member_id in ('6101','6102') and a.status = 'present'`)[0].n).toBe(2);
+});
+
 test("an officer cannot mark a member of the other gender, even with a forged request", async () => {
   const radha = await memberId("2053");
   const res = await mark(officerApi, radha, 1);

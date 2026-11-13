@@ -190,7 +190,10 @@ function MarkingPanel({
   const [results, setResults] = useState<SearchResult[]>([]);
   const [resultsFor, setResultsFor] = useState("");
   const [searchError, setSearchError] = useState("");
-  const [markingId, setMarkingId] = useState<number | null>(null);
+  // Only the person being saved waits, so the officer can tap the next one straight away.
+  // The ref stops a quick double tap sending the same person twice before the screen updates.
+  const saving = useRef(new Set<number>());
+  const [savingIds, setSavingIds] = useState<number[]>([]);
   const [prefill, setPrefill] = useState<QuickEntryPrefill | null>(null);
   const [latest, setLatest] = useState<Marked | null>(null);
   const [unmarked, setUnmarked] = useState(initialUnmarked);
@@ -253,8 +256,9 @@ function MarkingPanel({
   };
 
   async function mark(member: SearchResult) {
-    if (markingId !== null) return;
-    setMarkingId(member.id);
+    if (saving.current.has(member.id)) return;
+    saving.current.add(member.id);
+    setSavingIds([...saving.current]);
     try {
       const res = await api<MarkResponse>("/api/officer/attendance", {
         json: { memberId: member.id, eventDay: event.event_day },
@@ -273,7 +277,8 @@ function MarkingPanel({
       toast("error", (err as Error).message);
       if (err instanceof ClientApiError && err.code === "event_not_active") onChanged();
     } finally {
-      setMarkingId(null);
+      saving.current.delete(member.id);
+      setSavingIds([...saving.current]);
     }
   }
 
@@ -390,7 +395,7 @@ function MarkingPanel({
         <Card aria-label="Search results" className="overflow-hidden">
           <ul className="divide-y divide-rule">
             {results.map((member) => (
-              <li key={member.id}><MemberRow member={member} busy={markingId === member.id} disabled={markingId !== null} showGender={officerGender === null} onMark={mark} /></li>
+              <li key={member.id}><MemberRow member={member} busy={savingIds.includes(member.id)} showGender={officerGender === null} onMark={mark} /></li>
             ))}
           </ul>
         </Card>
@@ -415,13 +420,11 @@ function MarkingPanel({
 function MemberRow({
   member,
   busy,
-  disabled,
   showGender,
   onMark,
 }: {
   member: SearchResult;
   busy: boolean;
-  disabled: boolean;
   showGender: boolean;
   onMark: (member: SearchResult) => void;
 }) {
@@ -448,7 +451,7 @@ function MemberRow({
             <span className="text-xs text-muted">{formatTime(member.present_at)}</span>
           </span>
         ) : (
-          <Button variant="success" size="pill" icon={CircleCheck} aria-label="Mark Present" title="Mark Present" loading={busy} disabled={disabled} onClick={() => onMark(member)}>
+          <Button variant="success" size="pill" icon={CircleCheck} aria-label="Mark Present" title="Mark Present" loading={busy} onClick={() => onMark(member)}>
             Mark
           </Button>
         )
