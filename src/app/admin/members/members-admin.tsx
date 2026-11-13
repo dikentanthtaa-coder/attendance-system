@@ -254,7 +254,8 @@ function UploadCard({
                   setError("");
                 }}
               />
-              <div className="flex flex-wrap justify-end gap-2">
+              {/* On phones each button fills the row, and takes its own line when both don't fit. */}
+              <div className="flex flex-wrap justify-end gap-2 max-sm:[&>*]:grow">
                 {onCancel && <Button variant="secondary" onClick={onCancel}>Cancel</Button>}
                 <Button type="submit" icon={Upload} loading={busy} disabled={!fileName}>
                   {busy ? "Uploading…" : replacing ? "Upload and replace list" : "Upload file"}

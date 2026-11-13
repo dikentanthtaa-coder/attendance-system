@@ -1670,6 +1670,21 @@ test("screens fit a phone with no sideways scroll; screenshots for review", asyn
   await adminPhone.screenshot({ path: `${dir}/members-delete-320.png` });
   await deletePopup.getByRole("button", { name: "Cancel" }).click();
   expect(await overflow(adminPhone)).toBeLessThanOrEqual(0);
+
+  // The upload card at 320px: Cancel and Upload each take a full-width line, and the prompt breaks between words.
+  await adminPhone.getByRole("button", { name: "Upload Excel" }).click();
+  const uploadCard = adminPhone.getByRole("region", { name: "Excel upload" });
+  const cardBox = (await uploadCard.boundingBox())!;
+  const cancelBox = (await uploadCard.getByRole("button", { name: "Cancel" }).boundingBox())!;
+  const uploadBox = (await uploadCard.getByRole("button", { name: "Upload and replace list" }).boundingBox())!;
+  expect(Math.abs(cancelBox.width - uploadBox.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(cancelBox.x - uploadBox.x)).toBeLessThanOrEqual(1);
+  expect(uploadBox.y).toBeGreaterThan(cancelBox.y);
+  expect(uploadBox.x + uploadBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width);
+  const prompt = uploadCard.getByText("Drag your file here, or click to choose");
+  expect(await prompt.evaluate((el) => getComputedStyle(el).wordBreak)).not.toBe("break-all");
+  await adminPhone.screenshot({ path: `${dir}/members-upload-320.png`, fullPage: true });
+  await uploadCard.getByRole("button", { name: "Cancel" }).click();
   await adminPhone.context().close();
 
   // An officer's menu holds Install app and Log out.

@@ -46,7 +46,8 @@ export function FileDrop({
       className={`flex cursor-pointer flex-col items-center gap-1 rounded-card border-2 border-dashed px-4 py-6 text-center transition-colors duration-150 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-brand ${look}`}
     >
       <Icon aria-hidden size={30} className={fileName ? "text-ok" : "text-brand"} />
-      <span className="font-semibold break-all">{fileName || "Drag your file here, or click to choose"}</span>
+      {/* A long file name may break anywhere to fit. The prompt only breaks between words. */}
+      <span className={`font-semibold ${fileName ? "break-all" : ""}`}>{fileName || "Drag your file here, or click to choose"}</span>
       <span className="text-sm text-muted">{fileName ? "Click to choose a different file" : note}</span>
       <input
         ref={inputRef}
