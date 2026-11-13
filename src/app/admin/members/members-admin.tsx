@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { CalendarCheck, FileUp, Hash, MapPin, Pencil, Phone, SearchX, Trash2, Upload, UserPlus, UsersRound } from "lucide-react";
+import { CalendarCheck, FileUp, Hash, MapPin, Pencil, Phone, SearchX, SlidersHorizontal, Trash2, Upload, UserPlus, UsersRound, X } from "lucide-react";
 import { CenterSelect, centerName, centerValue, EMPTY_CENTER, type CenterValue } from "@/components/center-select";
 import { DigitsField } from "@/components/digits-field";
 import { PasswordConfirm } from "@/components/password-confirm";
@@ -34,7 +34,7 @@ import {
   type SelectOption,
 } from "@/components/ui";
 import { api, ClientApiError } from "@/lib/client-api";
-import { MEMBER_ID_DIGITS, memberIdInputValue, mobileInputValue, type Gender, type MemberSource } from "@/lib/shared";
+import { MEMBER_ID_DIGITS, memberIdInputValue, mobileInputValue, SOURCE_LABEL, type Gender, type MemberSource } from "@/lib/shared";
 
 type ImportSummary = {
   fileName: string;
@@ -58,7 +58,27 @@ type Member = {
   attendance_count: number;
 };
 
-type MemberPage = { members: Member[]; total: number; pageSize: number };
+type MemberPage = { members: Member[]; total: number; pageSize: number; centers: string[] };
+
+/** Narrows the list. "all" means that filter is off. */
+type Filters = { gender: string; center: string; source: string; days: string };
+const NO_FILTERS: Filters = { gender: "all", center: "all", source: "all", days: "all" };
+
+const GENDER_FILTER: SelectOption[] = [
+  { value: "all", label: "All" },
+  { value: "Male", label: "Male" },
+  { value: "Female", label: "Female" },
+];
+const SOURCE_FILTER: SelectOption[] = [
+  { value: "all", label: "All" },
+  { value: "excel_import", label: SOURCE_LABEL.excel_import },
+  { value: "quick_entry", label: SOURCE_LABEL.quick_entry },
+];
+const DAYS_FILTER: SelectOption[] = [
+  { value: "all", label: "Any" },
+  { value: "present", label: "At least 1 day" },
+  { value: "never", label: "Never present" },
+];
 
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 const COLUMNS = ["No", "MemberID", "Name", "Mo.no.", "Gender", "Center"];
@@ -299,20 +319,35 @@ function UploadCard({
 function MemberList({ refreshKey, initial }: { refreshKey: number; initial: MemberPage }) {
   const toast = useToast();
   const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [page, setPage] = useState(1);
   const [data, setData] = useState(initial);
   const [loadError, setLoadError] = useState("");
   const [editing, setEditing] = useState<Member | null>(null);
   const [deleting, setDeleting] = useState<Member | null>(null);
+  const [deletingFiltered, setDeletingFiltered] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
+  const activeFilters = Object.values(filters).filter((v) => v !== "all").length;
+  const filtered = search.trim() !== "" || activeFilters > 0;
+  const setFilter = (key: keyof Filters) => (value: string) => {
+    setFilters((f) => ({ ...f, [key]: value }));
+    setPage(1);
+  };
+  const clearFilters = () => {
+    setSearch("");
+    setFilters(NO_FILTERS);
+    setPage(1);
+  };
 
   useEffect(() => {
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      api<MemberPage>(`/api/admin/members?q=${encodeURIComponent(search)}&page=${page}`, { signal: controller.signal })
+      const query = new URLSearchParams({ q: search, ...filters, page: String(page) });
+      api<MemberPage>(`/api/admin/members?${query}`, { signal: controller.signal })
         .then((result) => {
           setData(result);
           setLoadError("");
@@ -325,7 +360,28 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
       clearTimeout(timer);
       controller.abort();
     };
-  }, [search, page, refreshKey, reloadKey]);
+  }, [search, filters, page, refreshKey, reloadKey]);
+
+  /** Throws on a wrong password, or when the count changed, so the dialog shows why and stays open. */
+  async function deleteFiltered(password: string) {
+    try {
+      const result = await api<{ deleted: number; removedAttendance: number }>("/api/admin/members/delete-filtered", {
+        json: { password, filters: { q: search, ...filters }, expected: data.total },
+      });
+      setDeletingFiltered(false);
+      toast(
+        "success",
+        `Deleted ${result.deleted} member${result.deleted === 1 ? "" : "s"}` +
+          (result.removedAttendance > 0 ? `, with ${result.removedAttendance} attendance mark${result.removedAttendance === 1 ? "" : "s"}.` : "."),
+      );
+      setPage(1);
+      reload();
+    } catch (err) {
+      // Someone added or changed members meanwhile: show the new count before anything is deleted.
+      if (err instanceof ClientApiError && err.code === "list_changed") reload();
+      throw err;
+    }
+  }
 
   async function confirmDelete() {
     if (!deleting) return;
@@ -362,26 +418,65 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
 
   return (
     <Card aria-label="Member list" className="overflow-hidden">
-      {/* Search first and wide, on the left. The count sits to its right, or above it on a phone. */}
-      <div className="flex flex-col-reverse gap-2 border-b border-rule px-4 py-3.5 sm:flex-row sm:items-end sm:gap-4 md:px-5">
-        <div className="w-full sm:w-3/4">
-          <Field label="Search members" htmlFor="member-list-search">
-            <SearchInput
-              id="member-list-search"
-              placeholder="Member ID, name or mobile"
-              value={search}
-              onClear={() => {
-                setSearch("");
-                setPage(1);
-              }}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-            />
-          </Field>
+      {/* Search first and widest, then the filters. The count and what to do with it sit under them. */}
+      <div className="flex flex-col gap-3 border-b border-rule px-4 py-3.5 md:px-5">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))]">
+          <div className="sm:col-span-2 lg:col-span-1">
+            <Field label="Search members" htmlFor="member-list-search">
+              <SearchInput
+                id="member-list-search"
+                placeholder="Member ID, name or mobile"
+                value={search}
+                onClear={() => {
+                  setSearch("");
+                  setPage(1);
+                }}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+              />
+            </Field>
+          </div>
+          {/* Phones keep the filters folded away behind one button, as on the Dashboard. */}
+          <div className="sm:hidden">
+            <Button variant="secondary" icon={SlidersHorizontal} aria-expanded={filtersOpen} onClick={() => setFiltersOpen((o) => !o)}>
+              Filters{activeFilters > 0 ? ` (${activeFilters})` : ""}
+            </Button>
+          </div>
+          <div className={`${filtersOpen ? "grid" : "hidden"} grid-cols-2 gap-3 sm:contents`}>
+            <Field label="Gender" htmlFor="member-filter-gender">
+              <Select id="member-filter-gender" value={filters.gender} active={filters.gender !== "all"} options={GENDER_FILTER} onChange={setFilter("gender")} />
+            </Field>
+            <Field label="Center" htmlFor="member-filter-center">
+              <Select
+                id="member-filter-center"
+                value={filters.center}
+                active={filters.center !== "all"}
+                // A chosen center stays listed after its last member is deleted, so the box still says what's chosen.
+                options={[{ value: "all", label: "All Centers" }, ...[...new Set([...data.centers, ...(filters.center === "all" ? [] : [filters.center])])].map((c) => ({ value: c, label: c }))]}
+                onChange={setFilter("center")}
+              />
+            </Field>
+            <Field label="Member source" htmlFor="member-filter-source">
+              <Select id="member-filter-source" value={filters.source} active={filters.source !== "all"} options={SOURCE_FILTER} onChange={setFilter("source")} />
+            </Field>
+            <Field label="Days present" htmlFor="member-filter-days">
+              <Select id="member-filter-days" value={filters.days} active={filters.days !== "all"} options={DAYS_FILTER} onChange={setFilter("days")} />
+            </Field>
+          </div>
         </div>
-        <h2 className="min-w-0 text-base font-semibold sm:flex-1 sm:pb-2.5 sm:text-right">All members ({data.total})</h2>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="min-w-0 text-base font-semibold">{filtered ? `Matching members (${data.total})` : `All members (${data.total})`}</h2>
+          {filtered && (
+            <div className="flex flex-wrap gap-2 max-sm:[&>*]:flex-1">
+              <Button variant="ghost" size="sm" icon={X} onClick={clearFilters}>Clear filters</Button>
+              <Button variant="danger-outline" size="sm" icon={Trash2} disabled={data.total === 0} onClick={() => setDeletingFiltered(true)}>
+                Delete Filtered ({data.total})
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
       {loadError && (
@@ -391,8 +486,14 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
       )}
 
       {data.members.length === 0 && (
-        search ? (
-          <EmptyState icon={SearchX} titleAs="p" title={`No member matches “${search}”`} description="Check the spelling or try the mobile number." />
+        filtered ? (
+          <EmptyState
+            icon={SearchX}
+            titleAs="p"
+            title={search.trim() ? `No member matches “${search}”` : "No member matches these filters"}
+            description={search.trim() ? "Check the spelling, try the mobile number, or clear the filters." : "Try a different filter."}
+            action={<Button variant="secondary" icon={X} onClick={clearFilters}>Clear filters</Button>}
+          />
         ) : (
           <EmptyState icon={UsersRound} titleAs="p" title="No members yet" description="Upload the member Excel above, or officers can add people with Quick Entry during an event." />
         )
@@ -465,8 +566,38 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
           )
         }
       />
+
+      <PasswordConfirm
+        open={deletingFiltered}
+        title="Delete filtered members"
+        confirmLabel={`Delete ${data.total} Member${data.total === 1 ? "" : "s"}`}
+        busyLabel="Deleting…"
+        icon={Trash2}
+        onConfirm={deleteFiltered}
+        onCancel={() => setDeletingFiltered(false)}
+      >
+        <p>
+          Delete <strong>{data.total} member{data.total === 1 ? "" : "s"}</strong> who match:
+        </p>
+        <ul className="flex flex-wrap gap-1.5" aria-label="Filters in use">
+          {filterSummary(search, filters).map((f) => <li key={f}><Badge tone="brand">{f}</Badge></li>)}
+        </ul>
+        <p>Their attendance is removed from every session and report too. This can&apos;t be undone.</p>
+      </PasswordConfirm>
     </Card>
   );
+}
+
+/** The search and filters in use, in words, so Admin can see exactly what Delete Filtered covers. */
+function filterSummary(search: string, f: Filters) {
+  const label = (options: SelectOption[], value: string) => options.find((o) => o.value === value)?.label ?? value;
+  return [
+    search.trim() && `Search: “${search.trim()}”`,
+    f.gender !== "all" && `Gender: ${label(GENDER_FILTER, f.gender)}`,
+    f.center !== "all" && `Center: ${f.center}`,
+    f.source !== "all" && `Member source: ${label(SOURCE_FILTER, f.source)}`,
+    f.days !== "all" && `Days present: ${label(DAYS_FILTER, f.days)}`,
+  ].filter((x): x is string => Boolean(x));
 }
 
 const GENDER_OPTIONS: SelectOption[] = [

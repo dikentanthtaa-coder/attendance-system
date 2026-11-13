@@ -58,7 +58,7 @@ Mukta Vaani throughout: it covers Latin and Gujarati, and has true tabular figur
 - Everyone finds people by search only, Admin included. There's no "Not marked yet" list.
 - Below 1024px the header is one short row: a menu button, the app name, and the role and current page under it. Every page, Install app and Log out are in a drawer that slides in from the left. From 1024px the links sit in the header.
 - On phones, page-title buttons share one full-width row, an alert's button drops under its message at full width, and a list row's actions can drop under the details (`stackActions`), so nothing is squeezed into a narrow column.
-- Rare actions that can't be undone (Clear Attendance, replacing the member list) ask for the Admin login password, and Clear Attendance sits at the foot of the Dashboard, away from everyday buttons.
+- Rare actions that can't be undone (Clear Attendance, replacing the member list, Delete Filtered on Members) ask for the Admin login password, and Clear Attendance sits at the foot of the Dashboard, away from everyday buttons. Delete Filtered only appears once a search or filter is in use, lists the filters in its dialog, and is refused if the number matching changed since Admin saw it.
 - Totals show the person's own figure next to the whole: "My present" beside "Total present" for an officer, each officer beside "All officers" for Admin. Long lists show page numbers.
 - Confirmation appears beside the search box and toasts at the top of the screen, because a phone keyboard can hide the bottom.
 - Dropdowns are always `Select` or `CenterSelect`, never the browser's own `<select>` or `<datalist>`, which can't be styled and differ on every device. A filter in use is tinted, so it's clear why the numbers are narrowed.

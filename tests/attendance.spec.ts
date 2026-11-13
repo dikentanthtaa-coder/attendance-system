@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -67,9 +67,10 @@ const missingPlaceholders = (page: Page) =>
       .filter((el) => el.offsetParent !== null && !el.closest("[role=combobox], [aria-haspopup]") && el.getAttribute("role") !== "combobox" && !el.placeholder?.trim())
       .map((el) => el.id || el.name || el.outerHTML.slice(0, 60)),
   );
-const pick = async (page: Page, label: string, option: string) => {
-  await page.getByLabel(label, { exact: true }).click();
-  await page.getByRole("option", { name: option, exact: true }).click();
+/** `within` can be a dialog, when the page behind it has a field with the same label. */
+const pick = async (within: Page | Locator, label: string, option: string) => {
+  await within.getByLabel(label, { exact: true }).click();
+  await within.getByRole("option", { name: option, exact: true }).click();
 };
 const upload = (api: APIRequestContext, buffer: Buffer, name = "members.xlsx", password = TEST_PASSWORD) =>
   api.post("/api/admin/members/import", {
@@ -794,7 +795,7 @@ test("Admin adds a member by hand: checked like Quick Entry, saved as Register, 
   const mobile = dialog.getByLabel("Mobile Number");
   await mobile.pressSequentially("98a76-54 00 02 9");
   await expect(mobile).toHaveValue("9876540002");
-  await pick(admin, "Gender", "Female");
+  await pick(dialog, "Gender", "Female");
   await dialog.getByLabel("Center", { exact: true }).click();
   await dialog.getByRole("option", { name: "Vapi" }).click();
   const id = dialog.getByLabel("Global Member ID");
@@ -816,7 +817,7 @@ test("Admin adds a member by hand: checked like Quick Entry, saved as Register, 
   await admin.getByRole("button", { name: "Add Member" }).click();
   await dialog.getByLabel("Name").fill("Family Child");
   await dialog.getByLabel("Mobile Number").fill("9876540001");
-  await pick(admin, "Gender", "Male");
+  await pick(dialog, "Gender", "Male");
   await dialog.getByLabel("Center", { exact: true }).click();
   await dialog.getByRole("option", { name: "Vapi" }).click();
   await dialog.getByRole("button", { name: "Add Member" }).click();
@@ -2112,6 +2113,78 @@ test("a new upload replaces the earlier list, and Admin can clear attendance, bo
   expect((await adminApi.post("/api/admin/attendance/clear", { data: { password: TEST_PASSWORD, day: "all" } })).status()).toBe(200);
   expect((await db`select count(*)::int as n from attendance`)[0].n).toBe(0);
   expect((await db`select count(*)::int as n from audit_log where action = 'attendance.clear'`)[0].n).toBe(2);
+});
+
+test("Members can be filtered, and Admin can delete everyone a filter shows, behind the Admin password", async () => {
+  // Their own center, so nobody from earlier tests is caught up in it.
+  const add = async (name: string, gender: string, source: string) =>
+    (await db`insert into members (name, gender, center, created_source) values (${name}, ${gender}, 'Filtertown', ${source}) returning id`)[0].id as number;
+  const present = await add("Filter Present", "Female", "quick_entry");
+  const never = await add("Filter Never", "Female", "quick_entry");
+  const male = await add("Filter Male", "Male", "quick_entry");
+  const registered = await add("Filter Register", "Female", "excel_import");
+  await db`insert into attendance (member_id, event_day, marked_by) select ${present}, 1, id from app_users where username = 'admin'`;
+
+  // The list's filters on the server, including days present.
+  const names = async (query: string) =>
+    ((await (await adminApi.get(`/api/admin/members?center=Filtertown&${query}`)).json()).members as { name: string }[]).map((m) => m.name).sort();
+  expect(await names("")).toEqual(["Filter Male", "Filter Never", "Filter Present", "Filter Register"]);
+  expect(await names("gender=Female&source=quick_entry")).toEqual(["Filter Never", "Filter Present"]);
+  expect(await names("days=present")).toEqual(["Filter Present"]);
+  expect(await names("days=never&gender=Male")).toEqual(["Filter Male"]);
+
+  // Deleting is refused for officers, a wrong password, no filter at all, a value it doesn't know, or a count that's out of date.
+  const filters = { q: "", gender: "Female", center: "Filtertown", source: "quick_entry", days: "all" };
+  const del = (data: object, api = adminApi) => api.post("/api/admin/members/delete-filtered", { data: { password: TEST_PASSWORD, filters, expected: 2, ...data } });
+  expect((await del({}, officerApi)).status()).toBe(403);
+  expect((await del({ password: "wrong-password" })).status()).toBe(403);
+  const unfiltered = await del({ filters: { q: "  ", gender: "all", center: "all", source: "all", days: "all" } });
+  expect((await unfiltered.json()).code).toBe("no_filter");
+  expect((await del({ filters: { ...filters, gender: "female" } })).status()).toBe(400);
+  expect((await (await del({ expected: 5 })).json()).code).toBe("list_changed");
+  expect((await db`select count(*)::int as n from members where center = 'Filtertown'`)[0].n).toBe(4);
+
+  // On the screen: filters narrow the list, and Delete Filtered names them before deleting.
+  await admin.goto("/admin/members");
+  const list = admin.getByRole("region", { name: "Member list" });
+  await expect(list.getByRole("heading", { name: /^All members/ })).toBeVisible();
+  await expect(list.getByRole("button", { name: /Delete Filtered/ })).toHaveCount(0);
+  await pick(admin, "Center", "Filtertown");
+  await expect(list.getByRole("heading", { name: "Matching members (4)" })).toBeVisible();
+  await pick(admin, "Gender", "Female");
+  await pick(admin, "Member source", "Quick Member");
+  await expect(list.getByRole("heading", { name: "Matching members (2)" })).toBeVisible();
+  await list.getByRole("button", { name: "Delete Filtered (2)" }).click();
+  const dialog = admin.getByRole("dialog", { name: "Delete filtered members" });
+  await expect(dialog.getByRole("list", { name: "Filters in use" })).toContainText("Center: Filtertown");
+  await expect(dialog.getByRole("list", { name: "Filters in use" })).toContainText("Gender: Female");
+  await expect(dialog.getByRole("list", { name: "Filters in use" })).toContainText("Member source: Quick Member");
+  await dialog.getByLabel("Admin password").fill("wrong-password");
+  await dialog.getByRole("button", { name: "Delete 2 Members" }).click();
+  await expect(dialog).toContainText("That password isn't right");
+
+  // Someone new who matches arrives meanwhile: nothing is deleted until Admin has seen the new count.
+  const late = await add("Filter Late", "Female", "quick_entry");
+  await dialog.getByLabel("Admin password").fill(TEST_PASSWORD);
+  await dialog.getByRole("button", { name: "Delete 2 Members" }).click();
+  await expect(dialog).toContainText("The list changed while this was open: 3 members now match");
+  expect((await db`select count(*)::int as n from members where center = 'Filtertown'`)[0].n).toBe(5);
+  await dialog.getByRole("button", { name: "Delete 3 Members" }).click();
+  await expect(admin.getByRole("status")).toContainText("Deleted 3 members, with 1 attendance mark.");
+  await expect(dialog).toBeHidden();
+  await expect(list.getByText("No member matches these filters")).toBeVisible();
+
+  const left = await db`select id from members where center = 'Filtertown' order by id`;
+  expect(left.map((m) => m.id)).toEqual([male, registered]);
+  expect((await db`select count(*)::int as n from attendance where member_id = ${present}`)[0].n).toBe(0);
+  const [log] = await db`select details from audit_log where action = 'member.delete_filtered' order by id desc limit 1`;
+  expect(log.details.deleted).toBe(3);
+  expect(log.details.members.map((m: { id: number }) => m.id).sort((a: number, b: number) => a - b)).toEqual([present, never, late]);
+  expect(log.details.attendance.length).toBe(1);
+
+  // Clear filters brings back everyone.
+  await list.getByRole("button", { name: "Clear filters" }).first().click();
+  await expect(list.getByRole("heading", { name: /^All members/ })).toBeVisible();
 });
 
 test("no screen threw an error during this whole run", () => {
