@@ -63,6 +63,8 @@ type MemberPage = { members: Member[]; total: number; pageSize: number; centers:
 /** Narrows the list. "all" means that filter is off. */
 type Filters = { gender: string; center: string; source: string; days: string };
 const NO_FILTERS: Filters = { gender: "all", center: "all", source: "all", days: "all" };
+/** Which search and filters a list was loaded for, to tell when the one on screen is out of date. */
+const listKey = (q: string, f: Filters) => JSON.stringify([q, f.gender, f.center, f.source, f.days]);
 
 const GENDER_FILTER: SelectOption[] = [
   { value: "all", label: "All" },
@@ -322,6 +324,7 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [page, setPage] = useState(1);
   const [data, setData] = useState(initial);
+  const [loadedKey, setLoadedKey] = useState(() => listKey("", NO_FILTERS));
   const [loadError, setLoadError] = useState("");
   const [editing, setEditing] = useState<Member | null>(null);
   const [deleting, setDeleting] = useState<Member | null>(null);
@@ -333,12 +336,19 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
   const activeFilters = Object.values(filters).filter((v) => v !== "all").length;
   const filtered = search.trim() !== "" || activeFilters > 0;
+  // Until the list for the latest search and filters arrives, its count isn't shown and nothing can be deleted by it.
+  const counting = loadedKey !== listKey(search, filters);
+  const count = counting ? "…" : String(data.total);
   const setFilter = (key: keyof Filters) => (value: string) => {
     setFilters((f) => ({ ...f, [key]: value }));
     setPage(1);
   };
   const clearFilters = () => {
     setSearch("");
+    setFilters(NO_FILTERS);
+    setPage(1);
+  };
+  const clearDropdowns = () => {
     setFilters(NO_FILTERS);
     setPage(1);
   };
@@ -350,6 +360,7 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
       api<MemberPage>(`/api/admin/members?${query}`, { signal: controller.signal })
         .then((result) => {
           setData(result);
+          setLoadedKey(listKey(search, filters));
           setLoadError("");
         })
         .catch((err) => {
@@ -438,41 +449,23 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
               />
             </Field>
           </div>
-          {/* Phones keep the filters folded away behind one button, as on the Dashboard. */}
+          {/* Phones open the filters in a pop-up, so the list isn't pushed down by four dropdowns. */}
           <div className="sm:hidden">
-            <Button variant="secondary" icon={SlidersHorizontal} aria-expanded={filtersOpen} onClick={() => setFiltersOpen((o) => !o)}>
+            <Button variant="secondary" icon={SlidersHorizontal} className="w-full" aria-haspopup="dialog" onClick={() => setFiltersOpen(true)}>
               Filters{activeFilters > 0 ? ` (${activeFilters})` : ""}
             </Button>
           </div>
-          <div className={`${filtersOpen ? "grid" : "hidden"} grid-cols-2 gap-3 sm:contents`}>
-            <Field label="Gender" htmlFor="member-filter-gender">
-              <Select id="member-filter-gender" value={filters.gender} active={filters.gender !== "all"} options={GENDER_FILTER} onChange={setFilter("gender")} />
-            </Field>
-            <Field label="Center" htmlFor="member-filter-center">
-              <Select
-                id="member-filter-center"
-                value={filters.center}
-                active={filters.center !== "all"}
-                // A chosen center stays listed after its last member is deleted, so the box still says what's chosen.
-                options={[{ value: "all", label: "All Centers" }, ...[...new Set([...data.centers, ...(filters.center === "all" ? [] : [filters.center])])].map((c) => ({ value: c, label: c }))]}
-                onChange={setFilter("center")}
-              />
-            </Field>
-            <Field label="Member source" htmlFor="member-filter-source">
-              <Select id="member-filter-source" value={filters.source} active={filters.source !== "all"} options={SOURCE_FILTER} onChange={setFilter("source")} />
-            </Field>
-            <Field label="Days present" htmlFor="member-filter-days">
-              <Select id="member-filter-days" value={filters.days} active={filters.days !== "all"} options={DAYS_FILTER} onChange={setFilter("days")} />
-            </Field>
+          <div className="hidden sm:contents">
+            <FilterFields idPrefix="member-filter" filters={filters} centers={data.centers} onChange={setFilter} />
           </div>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="min-w-0 text-base font-semibold">{filtered ? `Matching members (${data.total})` : `All members (${data.total})`}</h2>
+          <h2 className="min-w-0 text-base font-semibold">{filtered ? `Matching members (${count})` : `All members (${count})`}</h2>
           {filtered && (
             <div className="flex flex-wrap gap-2 max-sm:[&>*]:flex-1">
               <Button variant="ghost" size="sm" icon={X} onClick={clearFilters}>Clear filters</Button>
-              <Button variant="danger-outline" size="sm" icon={Trash2} disabled={data.total === 0} onClick={() => setDeletingFiltered(true)}>
-                Delete Filtered ({data.total})
+              <Button variant="danger-outline" size="sm" icon={Trash2} disabled={counting || data.total === 0} onClick={() => setDeletingFiltered(true)}>
+                Delete Filtered ({count})
               </Button>
             </div>
           )}
@@ -532,6 +525,17 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
 
       <Pagination page={page} pageSize={data.pageSize} total={data.total} onPage={setPage} />
 
+      {/* Choices apply as they're made, so the list behind and the count on the button are always current. */}
+      <Modal open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Filters">
+        <div className="flex flex-col gap-4">
+          <FilterFields idPrefix="member-filter-popup" filters={filters} centers={data.centers} onChange={setFilter} />
+        </div>
+        <ModalActions>
+          <Button variant="secondary" icon={X} disabled={activeFilters === 0} onClick={clearDropdowns}>Clear filters</Button>
+          <Button onClick={() => setFiltersOpen(false)}>{counting ? "Show members" : `Show ${data.total} member${data.total === 1 ? "" : "s"}`}</Button>
+        </ModalActions>
+      </Modal>
+
       <Modal open={editing !== null} onClose={() => setEditing(null)} title="Edit member">
         {editing && (
           <EditForm
@@ -585,6 +589,44 @@ function MemberList({ refreshKey, initial }: { refreshKey: number; initial: Memb
         <p>Their attendance is removed from every session and report too. This can&apos;t be undone.</p>
       </PasswordConfirm>
     </Card>
+  );
+}
+
+/** The four filter dropdowns: in a row beside the search on larger screens, in the Filters pop-up on phones. */
+function FilterFields({
+  idPrefix,
+  filters,
+  centers,
+  onChange,
+}: {
+  idPrefix: string;
+  filters: Filters;
+  centers: string[];
+  onChange: (key: keyof Filters) => (value: string) => void;
+}) {
+  // A chosen center stays listed after its last member is deleted, so the box still says what's chosen.
+  const centerOptions = [...new Set([...centers, ...(filters.center === "all" ? [] : [filters.center])])];
+  return (
+    <>
+      <Field label="Gender" htmlFor={`${idPrefix}-gender`}>
+        <Select id={`${idPrefix}-gender`} value={filters.gender} active={filters.gender !== "all"} options={GENDER_FILTER} onChange={onChange("gender")} />
+      </Field>
+      <Field label="Center" htmlFor={`${idPrefix}-center`}>
+        <Select
+          id={`${idPrefix}-center`}
+          value={filters.center}
+          active={filters.center !== "all"}
+          options={[{ value: "all", label: "All Centers" }, ...centerOptions.map((c) => ({ value: c, label: c }))]}
+          onChange={onChange("center")}
+        />
+      </Field>
+      <Field label="Member source" htmlFor={`${idPrefix}-source`}>
+        <Select id={`${idPrefix}-source`} value={filters.source} active={filters.source !== "all"} options={SOURCE_FILTER} onChange={onChange("source")} />
+      </Field>
+      <Field label="Days present" htmlFor={`${idPrefix}-days`}>
+        <Select id={`${idPrefix}-days`} value={filters.days} active={filters.days !== "all"} options={DAYS_FILTER} onChange={onChange("days")} />
+      </Field>
+    </>
   );
 }
 

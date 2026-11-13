@@ -1629,6 +1629,47 @@ test("screens fit a phone with no sideways scroll; screenshots for review", asyn
   await expect(adminPhone.getByRole("region", { name: "Member list" }).getByRole("listitem").first()).toBeVisible();
   expect(await overflow(adminPhone)).toBeLessThanOrEqual(0);
   await adminPhone.screenshot({ path: `${dir}/members-phone.png` });
+  // On a phone the Members filters open in a pop-up. Choices apply at once, and its button shows the count.
+  await adminPhone.getByRole("button", { name: "Filters", exact: true }).click();
+  const filterPopup = adminPhone.getByRole("dialog", { name: "Filters" });
+  await expect(filterPopup.getByRole("button", { name: "Clear filters" })).toBeDisabled();
+  await pick(filterPopup, "Gender", "Female");
+  const memberList = adminPhone.getByRole("region", { name: "Member list" });
+  const matching = (await db`select count(*)::int as n from members where gender = 'Female'`)[0].n as number;
+  await expect(filterPopup.getByRole("button", { name: `Show ${matching} members` })).toBeVisible();
+  await expect(memberList.getByRole("heading", { name: `Matching members (${matching})` })).toBeVisible();
+  await expect(memberList.getByRole("listitem").filter({ hasText: "Male" }).filter({ hasNotText: "Female" })).toHaveCount(0);
+  const popupBox = (await filterPopup.boundingBox())!;
+  expect(popupBox.x).toBeGreaterThanOrEqual(0);
+  expect(popupBox.x + popupBox.width).toBeLessThanOrEqual(390);
+  await adminPhone.screenshot({ path: `${dir}/members-filters-phone.png` });
+  await filterPopup.getByRole("button", { name: `Show ${matching} members` }).click();
+  await expect(filterPopup).toBeHidden();
+  await expect(adminPhone.getByRole("button", { name: "Filters (1)", exact: true })).toBeVisible();
+  expect(await overflow(adminPhone)).toBeLessThanOrEqual(0);
+  await adminPhone.screenshot({ path: `${dir}/members-filtered-phone.png` });
+  // On the narrowest phone, every button in these dialogs stays whole and inside the dialog.
+  await adminPhone.setViewportSize({ width: 320, height: 791 });
+  const buttonsFit = async (dialog: Locator) => {
+    const box = (await dialog.boundingBox())!;
+    for (const button of await dialog.getByRole("button").all()) {
+      const b = (await button.boundingBox())!;
+      expect(b.x).toBeGreaterThanOrEqual(box.x);
+      expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width);
+    }
+  };
+  await adminPhone.getByRole("button", { name: "Filters (1)", exact: true }).click();
+  await expect(filterPopup.getByRole("button", { name: `Show ${matching} members` })).toBeVisible();
+  await buttonsFit(filterPopup);
+  await adminPhone.screenshot({ path: `${dir}/members-filters-320.png` });
+  await filterPopup.getByRole("button", { name: `Show ${matching} members` }).click();
+  await memberList.getByRole("button", { name: `Delete Filtered (${matching})` }).click();
+  const deletePopup = adminPhone.getByRole("dialog", { name: "Delete filtered members" });
+  await expect(deletePopup.getByLabel("Admin password")).toBeVisible();
+  await buttonsFit(deletePopup);
+  await adminPhone.screenshot({ path: `${dir}/members-delete-320.png` });
+  await deletePopup.getByRole("button", { name: "Cancel" }).click();
+  expect(await overflow(adminPhone)).toBeLessThanOrEqual(0);
   await adminPhone.context().close();
 
   // An officer's menu holds Install app and Log out.

@@ -31,9 +31,12 @@ export function Modal({ open, onClose, title, children }: { open: boolean; onClo
   );
 }
 
-/** The row of buttons at the bottom of any dialog. */
+/**
+ * The row of buttons at the bottom of any dialog. On phones they fill the row, and when two don't fit
+ * side by side, as on a 320px screen, each takes its own full-width line instead of running off the edge.
+ */
 export function ModalActions({ children }: { children: ReactNode }) {
-  return <div className="mt-5 flex justify-end gap-2">{children}</div>;
+  return <div className="mt-5 flex flex-wrap justify-end gap-2 max-sm:[&>*]:grow">{children}</div>;
 }
 
 export function ConfirmDialog({
